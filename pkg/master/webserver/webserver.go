@@ -3,15 +3,15 @@ package webserver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"html/template"
 	"net/http"
 	"time"
 
 	"github.com/fortnoxab/ginprometheus"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/master/jwt"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
 	"github.com/jonaz/ginlogrus"
 	"github.com/olahol/melody"
 	"github.com/sirupsen/logrus"
@@ -19,13 +19,17 @@ import (
 
 type Webserver struct {
 	Port      string
+	Masters   []string
 	Websocket *melody.Melody
+	jwt       *jwt.JWTHandler
 }
 
-func New(port string) *Webserver {
+func New(port, jwtKey string, masters []string) *Webserver {
 	return &Webserver{
 		Port:      port,
+		Masters:   masters,
 		Websocket: melody.New(),
+		jwt:       jwt.New(jwtKey),
 	}
 }
 
@@ -41,15 +45,19 @@ func (ws *Webserver) Init() *gin.Engine {
 	}
 	router.Use(ginlogrus.New(logrus.StandardLogger(), logIgnorePaths...), gin.Recovery())
 
-	// api := router.Group("/api")
-	// api.POST("/login-v1", TODO)
 	router.GET("/pending-machines", err(ws.listPendingMachines))
 	router.POST("/api/pending-machines/accept-v1", err(ws.approveMachine))
+	router.GET("/api/up-v1", err(ws.listMasters))
 
 	ws.initWS(router)
 
 	pprof.Register(router)
 	return router
+}
+
+func (ws *Webserver) listMasters(c *gin.Context) error {
+	c.JSON(http.StatusOK, gin.H{"masters": ws.Masters})
+	return nil
 }
 
 func (ws *Webserver) approveMachine(c *gin.Context) error {
@@ -68,12 +76,21 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 	}
 	for _, sess := range sessions {
 		if host, ok := sess.Get("host"); ok && host.(string) == resp.Host {
-			sess.Set("allowed", true)
 			logrus.Infof("approved %s", resp.Host)
-			err := sess.Write([]byte("nu är du acceptead"))
+			token, err := ws.jwt.GenerateJWT(resp.Host)
 			if err != nil {
 				logrus.Error(err)
-				break
+				continue
+			}
+			msg, err := protocol.NewMachineAccepted(resp.Host, token)
+			if err != nil {
+				logrus.Error(err)
+				continue
+			}
+			err = sess.Write(msg)
+			if err != nil {
+				logrus.Error(err)
+				continue
 			}
 			break
 		}
@@ -109,8 +126,9 @@ const acceptHost = (hostname) =>  {
     </tr>
     {{ range .}}
         <tr>
-            <td>{{ . }}</td>
-            <td><button onclick="acceptHost('{{.}}')">Accept</button></td>
+            <td>{{ .Name }}</td>
+            <td>{{ .IP }}</td>
+            <td><button onclick="acceptHost('{{.Name}}')">Accept</button></td>
         </tr>
     {{ end}}
 </table>
@@ -122,17 +140,25 @@ const acceptHost = (hostname) =>  {
 		return err
 	}
 
-	hostList := []string{}
+	type host struct {
+		Name string `json:"name"`
+		IP   string `json:"ip"`
+	}
+	hostList := []*host{}
 	sessions, err := ws.Websocket.Sessions()
 	for _, s := range sessions {
 		if a, exists := s.Get("allowed"); exists {
 			if a, ok := a.(bool); ok && !a {
-				host, ok := s.Get("host")
+				name, ok := s.Get("host")
 				if !ok {
 					logrus.Error("missing host key in websocket session")
 					continue
 				}
-				hostList = append(hostList, host.(string))
+				machine := &host{Name: name.(string)}
+				if ip, ok := s.Get("ip"); ok {
+					machine.IP = ip.(string)
+				}
+				hostList = append(hostList, machine)
 			}
 		}
 	}
@@ -143,10 +169,29 @@ const acceptHost = (hostname) =>  {
 func (ws *Webserver) initWS(router *gin.Engine) {
 	router.GET("/api/websocket-v1", func(c *gin.Context) {
 		keys := make(map[string]interface{})
-		// TODO decode this data from JWT
-		// TODO make sure we only have one connection from each host.
-		keys["host"] = "mimir001.sto1.fnox.se"
 		keys["allowed"] = false
+		keys["ip"] = c.ClientIP()
+
+		tokenString := c.Request.Header.Get("Authorization")
+		if tokenString == "" {
+			// TODO do we want to validate src IP compared to the git manifest here?
+			hostname := c.Request.Header.Get("X-hostname")
+			if hostname == "" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": "missing x-hostname header"})
+			}
+			keys["host"] = hostname
+		} else {
+			claims, err := ws.jwt.ValidateToken(tokenString)
+			if err != nil {
+				c.AbortWithError(http.StatusUnauthorized, err)
+				return
+			}
+			keys["host"] = claims.Host
+			keys["allowed"] = claims.Allowed
+		}
+
+		// TODO make sure we only have one connection from each host.
 		ws.Websocket.HandleRequestWithKeys(c.Writer, c.Request, keys)
 	})
 }
@@ -194,41 +239,5 @@ func err(f func(c *gin.Context) error) gin.HandlerFunc {
 		}
 	}
 }
-func TODO(c *gin.Context) {
-	c.AbortWithError(500, fmt.Errorf("TODO not implemented"))
-}
 
 var jwtKey = []byte("supersecretkey")
-
-type JWTClaim struct {
-	Host    string `json:"host"`
-	Allowed bool   `json:"allowed"`
-	jwt.StandardClaims
-}
-
-func ValidateToken(signedToken string) error {
-	token, err := jwt.ParseWithClaims(
-		signedToken,
-		&JWTClaim{},
-		func(token *jwt.Token) (interface{}, error) {
-			return []byte(jwtKey), nil
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("auth: error validating: %w", err)
-	}
-
-	if !token.Valid {
-		return fmt.Errorf("token not valid")
-	}
-
-	claims, ok := token.Claims.(*JWTClaim)
-	if !ok {
-		return fmt.Errorf("couldn't parse claims: ")
-	}
-	if claims.ExpiresAt < time.Now().Local().Unix() {
-		return fmt.Errorf("token expired")
-	}
-
-	return nil
-}

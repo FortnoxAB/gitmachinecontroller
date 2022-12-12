@@ -6,8 +6,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -19,6 +17,7 @@ import (
 	"github.com/fluxcd/pkg/git"
 	"github.com/fluxcd/pkg/git/gogit"
 	"github.com/fluxcd/pkg/git/repository"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/webserver"
 	"github.com/olahol/melody"
@@ -45,7 +44,9 @@ type Master struct {
 	GitKnownHostsPath string
 	GitPassPhrase     string
 	SecretKey         string
+	JWTKey            string
 	WsPort            string
+	Masters           []string
 	webserver         *webserver.Webserver
 }
 
@@ -60,16 +61,18 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		GitPassPhrase:     c.String("git-identity-passphrase"),
 		GitKnownHostsPath: c.String("git-known-hosts-path"),
 		SecretKey:         c.String("secret-key"),
+		JWTKey:            c.String("jwt-key"),
 		WsPort:            c.String("port"),
+		Masters:           c.StringSlice("master"),
 	}
 	return m
 }
 
 // testrun with
-// gmc master --git-path "jsonnet/vms/manifests/main" --git-url "ssh://git@git.fnox.se:7999/fo/infra.git" --git-branch "feature/gitmachine"
+// gmc master --git-path "jsonnet/vms/manifests/main" --git-url "ssh://git@git.fnox.se:7999/fo/infra.git" --git-branch "feature/gitmachine" --git-identity-path /home/jonaz/.ssh/id_rsa --git-known-hosts-path /home/jonaz/.ssh/known_hosts --git-identity-passphrase asdfasdf
 
 func (m *Master) Run(ctx context.Context) error {
-	m.webserver = webserver.New(m.WsPort)
+	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters)
 	go m.webserver.Start(ctx)
 
 	return m.run(ctx)
@@ -96,21 +99,20 @@ func (m *Master) run(ctx context.Context) error {
 
 	ticker := time.NewTicker(m.GitPollInterval)
 
-	manifestCh := make(chan types.Machine)
+	manifestCh := make(chan *types.Machine)
 	go func() {
 		/* TODO */
 		for {
 			select {
 			case manifest := <-manifestCh:
-				fmt.Println(manifest.Host)
-				fmt.Println(manifest.IP)
 				// TODO template most string values to support secrets?
-				b, err := json.Marshal(manifest)
+				msg, err := protocol.NewMachineUpdate(manifest)
 				if err != nil {
 					logrus.Error(err)
 					continue
 				}
-				err = m.webserver.Websocket.BroadcastFilter(b, func(s *melody.Session) bool {
+				err = m.webserver.Websocket.BroadcastFilter(msg, func(s *melody.Session) bool {
+					logrus.Debug("sending")
 					if host, exists := s.Get("host"); exists && host.(string) != manifest.Host {
 						return false
 					}
@@ -123,15 +125,7 @@ func (m *Master) run(ctx context.Context) error {
 					logrus.Error(err)
 					continue
 				}
-				// mSessions, err := m.webserver.Websocket.Sessions()
-				// if err != nil {
-				// 	logrus.Error(err)
-				// 	continue
-				// }
-				//
-				// for _, sess := range mSessions {
-				//
-				// }
+
 			case <-ctx.Done():
 				return
 			}
@@ -165,11 +159,9 @@ func (m *Master) run(ctx context.Context) error {
 	// cloneOpts.Tag = ref.Tag
 	// cloneOpts.SemVer = ref.SemVer
 	// }
-
-	// TODO context timeout here.
 }
 
-func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan types.Machine) error {
+func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan *types.Machine) error {
 	dir, err := ioutil.TempDir("", "gmc")
 	if err != nil {
 		return err
@@ -183,6 +175,7 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 
 	log.Println("clone")
 
+	// TODO context timeout here.
 	commit, err := gitClient.Clone(ctx, m.GitURL, cloneOpts)
 	if err != nil {
 		return err
@@ -192,7 +185,7 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 	files, err := os.ReadDir(filepath.Join(dir, m.GitPath))
 
 	for _, file := range files {
-		machine := types.Machine{}
+		machine := &types.Machine{}
 		path := filepath.Join(dir, m.GitPath, file.Name())
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -200,7 +193,7 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 			continue
 		}
 
-		err = yaml.Unmarshal(b, &machine)
+		err = yaml.Unmarshal(b, machine)
 		if err != nil {
 			logrus.Errorf("error yaml parse: %s err: %s", path, err)
 			continue

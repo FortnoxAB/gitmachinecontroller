@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
@@ -49,9 +50,12 @@ func app() *cli.App {
 
 	app.Commands = []*cli.Command{
 		{
-			Name:   "agent",
-			Usage:  "starts the agent that controls a machine and make sure its in the desired configured state.",
-			Action: nil,
+			Name:  "agent",
+			Usage: "starts the agent that controls a machine and make sure its in the desired configured state.",
+			Action: func(c *cli.Context) error {
+				agent := agent.NewAgentFromContext(c)
+				return agent.Run(c.Context)
+			},
 			Flags: []cli.Flag{
 				&cli.StringSliceFlag{
 					Name:  "master",
@@ -67,11 +71,16 @@ func app() *cli.App {
 					Value: false,
 					Usage: "only print what would have been changed.",
 				},
-				&cli.DurationFlag{
-					Name:  "poll-interval",
-					Value: time.Minute,
-					Usage: "How often do we sync from the masters.",
+				&cli.StringFlag{
+					Name:  "fake-hostname",
+					Usage: "Used for testing purpuses instead of checking hostname with os.Hostname()",
 				},
+				// masters fetch and push over websocket
+				// &cli.DurationFlag{
+				// 	Name:  "poll-interval",
+				// 	Value: time.Minute,
+				// 	Usage: "How often do we sync from the masters.",
+				// },
 			},
 		},
 		{
@@ -82,6 +91,10 @@ func app() *cli.App {
 				return master.Run(c.Context)
 			},
 			Flags: []cli.Flag{
+				&cli.StringSliceFlag{
+					Name:  "master",
+					Usage: "which masters to advertise when using HA.",
+				},
 				&cli.StringFlag{
 					Name:  "git-url",
 					Usage: "",
@@ -118,6 +131,10 @@ func app() *cli.App {
 				&cli.StringFlag{
 					Name:  "secret-key",
 					Usage: "used to decrypt secrets in the git repo with template function.",
+				},
+				&cli.StringFlag{
+					Name:  "jwt-key",
+					Usage: "used to sign the jwt's",
 				},
 				&cli.StringFlag{
 					Name:  "port",
