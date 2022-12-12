@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -23,47 +24,71 @@ import (
 func (mr *MachineReconciler) files(files types.Files) error {
 	for _, file := range files {
 		if file.URL != "" && file.Content != "" {
-			// TODO no return
 			logrus.Error(fmt.Errorf("file can only have Content or URL, not both"))
 			continue
 		}
 
 		if file.URL != "" {
-			err := fetchFromURL(file)
+			changed, err := fetchFromURL(file)
 			if err != nil {
 				logrus.Error(err)
+			}
+			if changed {
+				mr.unitNeedsTrigger(file.Systemd)
 			}
 			continue
 		}
 
 		if file.Content != "" {
-			// TODO check if there is a diff first
-			equal, err := fileEqual(file.Content, file.Path)
+			changed, err := writeContentIfNeeded(file)
 			if err != nil {
 				logrus.Error(err)
-				continue
 			}
-			if equal {
-				logrus.Info(file.Path, " already equal")
-				continue
-			}
-
-			mode, err := file.FileMode()
-			if err != nil {
-				logrus.Error(err)
-				continue
-			}
-
-			// TODO writefile ONLY if it did not exist. If it exists we need to make atomic move?
-			err = os.WriteFile(file.Path, []byte(file.Content), mode)
-			if err != nil {
-				logrus.Error(err)
+			if changed {
+				mr.unitNeedsTrigger(file.Systemd)
 			}
 			continue
 		}
-		// TODO add each changed file to mrestartUnits if we have SystemdReference on the file.
 	}
 	return nil
+}
+
+func writeContentIfNeeded(file *types.File) (bool, error) {
+	mode, err := file.FileMode()
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(file.Path); errors.Is(err, os.ErrNotExist) { // New file we can write directly to desired location
+		err = os.WriteFile(file.Path, []byte(file.Content), mode)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	equal, err := fileEqual(file.Content, file.Path)
+	if err != nil {
+		return false, err
+	}
+	if equal {
+		logrus.Info(file.Path, " already equal")
+		return false, nil
+	}
+
+	// existing file we make a tempfile in the same target directory and then atomic move.
+	tempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gcm")
+	if err != nil {
+		return false, err
+	}
+	defer tempFile.Close()
+	tempFile.Chmod(mode)
+
+	_, err = io.Copy(tempFile, bytes.NewBufferString(file.Content))
+	if err != nil {
+		return false, err
+	}
+
+	tempFile.Close()
+	return true, os.Rename(tempFile.Name(), file.Path)
 }
 
 func needsFetch(file *types.File) (bool, error) {
@@ -97,38 +122,39 @@ func needsFetch(file *types.File) (bool, error) {
 	return false, nil
 }
 
-func fetchFromURL(file *types.File) error {
+// fetchFromURL returns changed bool and an error.
+func fetchFromURL(file *types.File) (bool, error) {
 	missing, err := needsFetch(file)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// exit early if checksum already is correct.
 	if !missing {
-		return nil
+		return false, nil
 	}
 
 	mode, err := file.FileMode()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, file.URL, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	defer resp.Body.Close()
 
 	tempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gcm")
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tempFile.Close()
 
@@ -136,26 +162,30 @@ func fetchFromURL(file *types.File) error {
 
 	_, err = io.Copy(tempFile, resp.Body)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if file.ExtractFile != "" {
 		tempFile.Seek(0, io.SeekStart)
 		newTempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gcm")
 		if err != nil {
-			return err
+			return false, err
 		}
 		defer newTempFile.Close()
 		newTempFile.Chmod(mode)
 
 		err = extractTarGz(tempFile, newTempFile, file.ExtractFile)
 		if err != nil {
-			return err
+			return false, err
 		}
 
-		return os.Rename(newTempFile.Name(), file.Path)
+		// TODO check if our new file matches the checksum otherwise error out!
+		fmt.Printf("changed %#v\n", file)
+		return true, os.Rename(newTempFile.Name(), file.Path)
 	}
-	return os.Rename(tempFile.Name(), file.Path)
+	fmt.Printf("changed %#v\n", file)
+	// TODO check if our new file matches the checksum otherwise error out!
+	return true, os.Rename(tempFile.Name(), file.Path)
 }
 
 func extractTarGz(r io.Reader, w io.Writer, singleFile string) error {

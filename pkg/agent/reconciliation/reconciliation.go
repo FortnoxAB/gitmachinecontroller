@@ -8,7 +8,8 @@ import (
 )
 
 type MachineReconciler struct {
-	restartUnits map[string]string
+	restartUnits       map[string]string
+	daemonReloadNeeded bool
 }
 
 func (mr *MachineReconciler) Reconcile(machine *types.Machine) error {
@@ -32,7 +33,7 @@ func (mr *MachineReconciler) Reconcile(machine *types.Machine) error {
 		return err
 	}
 
-	return mr.Systemd(machine.Systemd)
+	return mr.runSystemdTriggers()
 }
 
 // Only yum for now.
@@ -42,7 +43,7 @@ func (mr *MachineReconciler) packages(packages types.Packages) error {
 		if pkg.Version == "*" {
 			name = pkg.Name
 		}
-		out, errStr, err := runCommand(fmt.Sprintf("yum install %s", name))
+		out, errStr, err := runCommand(fmt.Sprintf("yum install -y %s", name))
 		if err != nil {
 			logrus.Error(out, errStr, err)
 		}
@@ -50,6 +51,28 @@ func (mr *MachineReconciler) packages(packages types.Packages) error {
 	return nil
 }
 
-func (mr *MachineReconciler) Systemd(systemd types.SystemdUnits) error {
+func (mr *MachineReconciler) unitNeedsTrigger(systemd *types.SystemdReference) {
+	if systemd == nil {
+		return
+	}
+	mr.restartUnits[systemd.Name] = systemd.Action
+	if systemd.DaemonReload {
+		mr.daemonReloadNeeded = true
+	}
+}
+
+func (mr *MachineReconciler) runSystemdTriggers() error {
+	if mr.daemonReloadNeeded {
+		_, _, err := runCommand("systemctl daemon reload")
+		if err != nil {
+			return err
+		}
+	}
+	for name, action := range mr.restartUnits {
+		_, _, err := runCommand(fmt.Sprintf("systemctl %s %s", action, name))
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }

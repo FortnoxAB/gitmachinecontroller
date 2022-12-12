@@ -51,6 +51,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	return a.run(ctx)
 }
 func (a *Agent) run(pCtx context.Context) error {
+	logrus.SetFormatter(&logrus.TextFormatter{TimestampFormat: time.RFC3339Nano, FullTimestamp: true})
 	hostname, err := os.Hostname()
 	if err != nil {
 		return err
@@ -67,7 +68,11 @@ func (a *Agent) run(pCtx context.Context) error {
 	go func() {
 		defer a.wg.Done()
 		for {
-			master := a.findMasterForConnection()
+			master := a.findMasterForConnection(pCtx)
+
+			if pCtx.Err() != nil {
+				return
+			}
 			ctx, cancel := context.WithCancel(pCtx)
 
 			a.mutex.RLock()
@@ -97,7 +102,7 @@ func (a *Agent) run(pCtx context.Context) error {
 	return nil
 }
 
-func (a *Agent) findMasterForConnection() string {
+func (a *Agent) findMasterForConnection(ctx context.Context) string {
 	for {
 		for _, master := range a.Masters {
 			err := a.isMasterAlive(master)
@@ -106,12 +111,24 @@ func (a *Agent) findMasterForConnection() string {
 			}
 			return master
 		}
+		if ctx.Err() != nil {
+			return ""
+		}
+
 		logrus.Error("found no working master will sleep 10 seconds and try again")
-		time.Sleep(time.Second * 10)
+		delay := time.NewTimer(time.Second * 10)
+		select {
+		case <-delay.C:
+		case <-ctx.Done():
+			if !delay.Stop() {
+				<-delay.C
+			}
+			return ""
+		}
 	}
 }
 func (a *Agent) isMasterAlive(master string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	u, err := wsToHost(master)

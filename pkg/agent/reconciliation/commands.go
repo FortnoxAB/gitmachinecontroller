@@ -42,5 +42,9 @@ func runCommand(command string) (string, string, error) {
 	cmd.Stdout = outBuf
 	cmd.Stderr = errBuf
 	err = cmd.Run()
+	if err != nil {
+		return outBuf.String(), errBuf.String(),
+			fmt.Errorf("error running: %s error: %w stderr: %s stdout: %s", command, err, errBuf.String(), outBuf.String())
+	}
 	return outBuf.String(), errBuf.String(), err
 }

@@ -14,24 +14,16 @@ type Machine struct {
 	Lines     Lines             `json:"lines"`
 	Packages  Packages          `json:"packages"`
 	Provision Provision         `json:"provision"`
-	Systemd   SystemdUnits      `json:"systemd"`
 }
 
 type Packages []*Package
 
 type Package struct {
 	Name string
-	// * means latest
+
+	// Version where "*" means latest
 	Version string
 }
-
-type SystemdUnit struct {
-	Content string `json:"content"`
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-}
-
-type SystemdUnits []SystemdUnit
 
 type Command struct {
 	Command string `json:"command"`
@@ -42,13 +34,13 @@ type Commands []*Command
 type File struct {
 	Path string `json:"path"`
 	// if URL is archived specify which file to unarchive
-	ExtractFile string           `json:"extractFile"`
-	ExtractDir  string           `json:"extractDir"`
-	Checksum    string           `json:"checksum"`
-	Systemd     SystemdReference `json:"systemd,omitempty"`
-	Content     string           `json:"content"`
-	URL         string           `json:"url,omitempty"`
-	Mode        string           `json:"mode"`
+	ExtractFile string            `json:"extractFile"`
+	ExtractDir  string            `json:"extractDir"`
+	Checksum    string            `json:"checksum"`
+	Systemd     *SystemdReference `json:"systemd,omitempty"`
+	Content     string            `json:"content"`
+	URL         string            `json:"url,omitempty"`
+	Mode        string            `json:"mode"`
 }
 
 func (f File) FileMode() (os.FileMode, error) {
