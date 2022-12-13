@@ -48,3 +48,20 @@ func runCommand(command string) (string, string, error) {
 	}
 	return outBuf.String(), errBuf.String(), err
 }
+
+func runCommandCode(command string) (int, error) {
+	args, err := shlex.Split(command)
+	if err != nil {
+		return 1, err
+	}
+	cmd := exec.Command(args[0], args[1:]...) // #nosec
+	outBuf := &strings.Builder{}
+	errBuf := &strings.Builder{}
+	cmd.Stdout = outBuf
+	cmd.Stderr = errBuf
+	err = cmd.Run()
+	if err != nil {
+		return cmd.ProcessState.ExitCode(), fmt.Errorf("error running: %s error: %w stderr: %s stdout: %s", command, err, errBuf.String(), outBuf.String())
+	}
+	return cmd.ProcessState.ExitCode(), err
+}

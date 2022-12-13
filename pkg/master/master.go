@@ -106,14 +106,14 @@ func (m *Master) run(ctx context.Context) error {
 			select {
 			case manifest := <-manifestCh:
 				// TODO template most string values to support secrets?
-				msg, err := protocol.NewMachineUpdate(manifest)
+				msg, err := protocol.NewMachineUpdate(protocol.GitSource, manifest)
 				if err != nil {
 					logrus.Error(err)
 					continue
 				}
 				err = m.webserver.Websocket.BroadcastFilter(msg, func(s *melody.Session) bool {
 					logrus.Debug("sending")
-					if host, exists := s.Get("host"); exists && host.(string) != manifest.Host {
+					if host, exists := s.Get("host"); exists && host.(string) != manifest.Metadata.Name {
 						return false
 					}
 					if a, exists := s.Get("allowed"); exists && a.(bool) {

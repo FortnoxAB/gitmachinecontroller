@@ -38,23 +38,31 @@ type Websocket interface {
 	WriteMessage(messageType int, data []byte) error
 	SetTLSConfig(c *tls.Config)
 }
+type writeCh struct {
+	body  interface{}
+	errCh chan error
+	typ   int
+	data  []byte
+}
 
 type websocketClient struct {
 	conn            *websocket.Conn
 	tlsClientConfig *tls.Config
-	write           chan func()
+	writeJSON       chan writeCh
+	writeMessage    chan writeCh
 	read            chan []byte
 	wg              *sync.WaitGroup
 	disconnected    chan error
 	connected       chan struct{}
 	onConnect       func()
-	sync.Mutex
+	sync.RWMutex
 }
 
 // New creates a new Websocket.
 func New() Websocket {
 	return &websocketClient{
-		write:        make(chan func()),
+		writeJSON:    make(chan writeCh),
+		writeMessage: make(chan writeCh),
 		read:         make(chan []byte, 100),
 		wg:           &sync.WaitGroup{},
 		disconnected: make(chan error),
@@ -98,9 +106,11 @@ func (ws *websocketClient) ConnectContext(ctx context.Context, addr string, head
 	}
 	logrus.Infof("websocket: connected to %s", addr)
 	ws.wasConnected()
+	ws.Lock()
 	ws.conn = c
-	ws.readPump()
-	ws.writePump(ctx) <- struct{}{}
+	ws.Unlock()
+	ws.readPump(c)
+	ws.writePump(ctx, c) <- struct{}{}
 
 	if oncon := ws.getOnConnect(); oncon != nil {
 		oncon()
@@ -121,10 +131,7 @@ func (ws *websocketClient) WriteMessage(messageType int, data []byte) error {
 
 	delay := time.NewTimer(time.Millisecond * 10)
 	select {
-	case ws.write <- func() {
-		err := ws.conn.WriteMessage(messageType, data)
-		errCh <- err
-	}:
+	case ws.writeMessage <- writeCh{typ: messageType, data: data}:
 		if !delay.Stop() {
 			<-delay.C
 		}
@@ -139,10 +146,7 @@ func (ws *websocketClient) WriteJSON(v interface{}) error {
 	errCh := make(chan error, 1)
 	delay := time.NewTimer(time.Millisecond * 10)
 	select {
-	case ws.write <- func() {
-		err := ws.conn.WriteJSON(v)
-		errCh <- err
-	}:
+	case ws.writeJSON <- writeCh{errCh: errCh, body: v}:
 		if !delay.Stop() {
 			<-delay.C
 		}
@@ -152,14 +156,14 @@ func (ws *websocketClient) WriteJSON(v interface{}) error {
 	return <-errCh
 }
 
-func (ws *websocketClient) readPump() {
+func (ws *websocketClient) readPump(conn *websocket.Conn) {
 	ws.wg.Add(1)
 	go func() {
 		defer ws.wg.Done()
-		ws.conn.SetReadDeadline(time.Now().Add(pongWait))
-		ws.conn.SetPongHandler(func(string) error { ws.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error { conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 		for {
-			_, message, err := ws.conn.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
 				ws.wasDisconnected(err)
 				return
@@ -173,7 +177,7 @@ func (ws *websocketClient) readPump() {
 	}()
 }
 
-func (ws *websocketClient) writePump(ctx context.Context) chan struct{} {
+func (ws *websocketClient) writePump(ctx context.Context, conn *websocket.Conn) chan struct{} {
 	ready := make(chan struct{})
 	ws.wg.Add(1)
 	go func() {
@@ -182,13 +186,15 @@ func (ws *websocketClient) writePump(ctx context.Context) chan struct{} {
 		defer ticker.Stop()
 		for {
 			select {
-			case t := <-ws.write:
-				t()
+			case wc := <-ws.writeJSON:
+				wc.errCh <- conn.WriteJSON(wc.body)
+			case wc := <-ws.writeMessage:
+				wc.errCh <- conn.WriteMessage(wc.typ, wc.data)
 			case <-ctx.Done():
-				_ = ws.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+				_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 				return
 			case <-ticker.C:
-				if err := ws.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
+				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
 					logrus.Error("websocket: ping:", err)
 				}
 			case <-ready:
@@ -216,5 +222,7 @@ func (ws *websocketClient) wasConnected() {
 	}
 }
 func (ws *websocketClient) Close() error {
+	ws.RLock()
+	defer ws.RUnlock()
 	return ws.conn.Close()
 }

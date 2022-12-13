@@ -31,7 +31,8 @@ func (mr *MachineReconciler) files(files types.Files) error {
 		if file.URL != "" {
 			changed, err := fetchFromURL(file)
 			if err != nil {
-				logrus.Error(err)
+				logrus.Errorf("files: %s failed with error: %s", file.Path, err)
+				continue
 			}
 			if changed {
 				mr.unitNeedsTrigger(file.Systemd)
@@ -42,7 +43,8 @@ func (mr *MachineReconciler) files(files types.Files) error {
 		if file.Content != "" {
 			changed, err := writeContentIfNeeded(file)
 			if err != nil {
-				logrus.Error(err)
+				logrus.Errorf("files: %s failed with error: %s", file.Path, err)
+				continue
 			}
 			if changed {
 				mr.unitNeedsTrigger(file.Systemd)
@@ -101,8 +103,20 @@ func needsFetch(file *types.File) (bool, error) {
 	}
 	defer f.Close()
 
+	equal, err := hashIsEqual(f, file.Checksum)
+	if err != nil {
+		return false, err
+	}
+
+	if !equal {
+		return true, nil // checksum mismatch file needs fetching
+	}
+	return false, nil
+}
+
+func hashIsEqual(r io.Reader, checksum string) (bool, error) {
 	var h hash.Hash
-	switch len(file.Checksum) {
+	switch len(checksum) {
 	case 64:
 		h = sha256.New()
 	case 128:
@@ -111,15 +125,11 @@ func needsFetch(file *types.File) (bool, error) {
 		return false, fmt.Errorf("wrong checksum length expected 64(sha256) or 128(sha512)")
 	}
 
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, r); err != nil {
 		return false, err
 	}
-
 	sum := hex.EncodeToString(h.Sum(nil))
-	if sum != file.Checksum {
-		return true, nil // checksum mismatch file needs fetching
-	}
-	return false, nil
+	return sum == checksum, nil
 }
 
 // fetchFromURL returns changed bool and an error.
@@ -179,12 +189,25 @@ func fetchFromURL(file *types.File) (bool, error) {
 			return false, err
 		}
 
-		// TODO check if our new file matches the checksum otherwise error out!
-		fmt.Printf("changed %#v\n", file)
+		newTempFile.Seek(0, io.SeekStart)
+		equal, err := hashIsEqual(newTempFile, file.Checksum)
+		if err != nil {
+			return false, err
+		}
+		if !equal {
+			return false, fmt.Errorf("checksum mismatch. expected file to be %s", file.Checksum)
+		}
 		return true, os.Rename(newTempFile.Name(), file.Path)
 	}
-	fmt.Printf("changed %#v\n", file)
-	// TODO check if our new file matches the checksum otherwise error out!
+
+	tempFile.Seek(0, io.SeekStart)
+	equal, err := hashIsEqual(tempFile, file.Checksum)
+	if err != nil {
+		return false, err
+	}
+	if !equal {
+		return false, fmt.Errorf("checksum mismatch. expected file to be %s", file.Checksum)
+	}
 	return true, os.Rename(tempFile.Name(), file.Path)
 }
 

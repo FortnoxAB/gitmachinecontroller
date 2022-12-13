@@ -5,15 +5,28 @@ import (
 	"strconv"
 )
 
+// ApiVersion is gitmachinecontroller.io/v1beta1.
 type Machine struct {
-	Commands  Commands          `json:"commands"`
-	Files     Files             `json:"files"`
-	Host      string            `json:"host"`
-	IP        string            `json:"ip"`
-	Labels    map[string]string `json:"labels"`
-	Lines     Lines             `json:"lines"`
-	Packages  Packages          `json:"packages"`
-	Provision Provision         `json:"provision"`
+	APIVersion string    `json:"apiVersion"`
+	Kind       string    `json:"kind"`
+	Metadata   *Metadata `json:"metadata"`
+	Spec       *Spec     `json:"spec"`
+}
+
+type Metadata struct {
+	// This is the hostname of the machine
+	Name        string            `json:"name"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+}
+
+type Spec struct {
+	Commands  Commands  `json:"commands"`
+	Files     Files     `json:"files"`
+	IP        string    `json:"ip"`
+	Lines     Lines     `json:"lines"`
+	Packages  Packages  `json:"packages"`
+	Provision Provision `json:"provision"`
 }
 
 type Packages []*Package

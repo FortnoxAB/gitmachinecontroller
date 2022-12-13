@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -57,9 +58,15 @@ func app() *cli.App {
 				return agent.Run(c.Context)
 			},
 			Flags: []cli.Flag{
-				&cli.StringSliceFlag{
+				&cli.StringFlag{
 					Name:  "master",
-					Usage: "which master(s) to connect to. Recommends to be at least two masters.",
+					Usage: "which master to connect to. Will connect to masters and get all of them and persist to config if set.",
+				},
+				&cli.StringFlag{
+					Name:    "config",
+					Aliases: []string{"c"},
+					Value:   "/etc/gmc/agent.json",
+					Usage:   "config file location",
 				},
 				&cli.BoolFlag{
 					Name:  "one-shot",
@@ -173,6 +180,36 @@ func app() *cli.App {
 			},
 		},
 		{
+			Name:   "apply",
+			Usage:  `applies a directory of manifests to hosts. Useful for local development. Will be overridden by git source if not annotated with gcm.io/ignore="true"`,
+			Action: nil,
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					// this is the client for SREs so it needs to have a config somewhere.
+					Name:    "config",
+					Aliases: []string{"c"},
+					Value:   defaultConfigLocation(),
+					Usage:   "config file location. contains info about the master urls",
+				},
+				// TODO implement selector with k8s code func ParseToLabelSelector https://github.com/kubernetes/apimachinery/blob/7fb78ee962897d9de6bac4a8f0f1346eb1480ac4/pkg/apis/meta/v1/helpers.go#L105
+				&cli.StringFlag{
+					Name:    "selector",
+					Aliases: []string{"l"},
+					Usage:   "filter machines on, supports '=', '==', and '!='.(e.g. -l os=rhel,key2=value2)",
+				},
+				&cli.StringFlag{
+					Name:    "regexp",
+					Aliases: []string{"r"},
+					Usage:   "filter machine by regexp on hostname.",
+				},
+				&cli.BoolFlag{
+					Name:  "dry",
+					Value: false,
+					Usage: "only pring on which machines the command would have been run on.",
+				},
+			},
+		},
+		{
 			Name:   "bootstrap",
 			Usage:  "installs the agent on a new machine.",
 			Action: nil,
@@ -183,6 +220,12 @@ func app() *cli.App {
 					Aliases: []string{"c"},
 					Value:   defaultConfigLocation(),
 					Usage:   "config file location. contains info about the master urls",
+				},
+				&cli.StringFlag{
+					// this is the client for SREs so it needs to have a config somewhere.
+					Name:  "location",
+					Value: "/usr/local/bin",
+					Usage: "where to put the gmc binary when bootstrapping",
 				},
 				&cli.BoolFlag{
 					Name:  "dry",
@@ -216,7 +259,7 @@ func defaultConfigLocation() string {
 	if err != nil {
 		log.Fatalf("could not find user home directory: %s", err)
 	}
-	return dir
+	return filepath.Join(dir, ".config", "gmc.json")
 }
 
 func globalBefore(c *cli.Context) error {

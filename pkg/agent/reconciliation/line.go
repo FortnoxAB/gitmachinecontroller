@@ -15,8 +15,8 @@ func (mr *MachineReconciler) lines(lines types.Lines) error {
 	for _, line := range lines {
 		err := applyLine(line)
 		if err != nil {
-			logrus.Error(err)
-			return nil
+			logrus.Errorf("lines: %s: %s", line.Path, err)
+			continue
 		}
 	}
 	return nil
@@ -62,6 +62,7 @@ func applyLine(line *types.Line) error {
 	if err != nil {
 		return err
 	}
+	// TODO think about https://github.com/rancher/rke2/pull/1966/files
 
 	tempFile.Chmod(mode)
 	tempFile.Close()

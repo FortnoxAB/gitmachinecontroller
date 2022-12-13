@@ -6,9 +6,18 @@ import (
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 )
 
+type Source string
+
+const (
+	GitSource    = Source("git")
+	ManualSource = Source("manual")
+)
+
 type WebsocketMessage struct {
-	Type string          `json:"type"`
-	Body json.RawMessage `json:"body"`
+	Type      string          `json:"type"`
+	RequestID string          `json:"requestId"`
+	Source    Source          `json:"source"`
+	Body      json.RawMessage `json:"body"`
 }
 
 func (wm WebsocketMessage) MachineUpdate() (*types.Machine, error) {
@@ -32,15 +41,16 @@ func (wm *WebsocketMessage) Encode() ([]byte, error) {
 	return json.Marshal(wm)
 }
 
-func NewMachineUpdate(machine *types.Machine) ([]byte, error) {
+func NewMachineUpdate(source Source, machine *types.Machine) ([]byte, error) {
 	b, err := json.Marshal(machine)
 	if err != nil {
 		return nil, err
 	}
 
 	msg := WebsocketMessage{
-		Type: "machine-update",
-		Body: b,
+		Type:   "machine-update",
+		Source: source,
+		Body:   b,
 	}
 
 	return json.Marshal(msg)

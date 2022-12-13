@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/reconciliation"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
@@ -19,24 +21,25 @@ import (
 )
 
 // OnFunc is used in all the callbacks.
-type OnFunc func(json.RawMessage) error
+type OnFunc func(*protocol.WebsocketMessage) error
 
 type Agent struct {
-	Masters      []string
+	Master       string
 	OneShot      bool
 	Dry          bool
 	FakeHostname string
-	// TODO save and fetch from config file
-	JWTToken  string
-	wg        *sync.WaitGroup
-	callbacks map[string][]OnFunc
-	client    Websocket
-	mutex     sync.RWMutex
+	wg           *sync.WaitGroup
+	callbacks    map[string][]OnFunc
+	client       Websocket
+	mutex        sync.RWMutex
+	config       *config.Config
+	configFile   string
 }
 
 func NewAgentFromContext(c *cli.Context) *Agent {
 	m := &Agent{
-		Masters:      c.StringSlice("master"),
+		Master:       c.String("master"),
+		configFile:   c.String("config"),
 		OneShot:      c.Bool("one-shot"),
 		Dry:          c.Bool("dry"),
 		FakeHostname: c.String("fake-hostname"),
@@ -48,6 +51,30 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 }
 
 func (a *Agent) Run(ctx context.Context) error {
+	conf, err := config.FromFile(a.configFile)
+
+	// we dont have a config file. Just save master from command line argument to configfile.
+	if err != nil {
+		if os.IsNotExist(err) {
+			conf = &config.Config{
+				Masters: []string{a.Master},
+			}
+			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
+			if err != nil {
+				return err
+			}
+
+			err = config.ToFile(a.configFile, conf)
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	a.config = conf
+
 	return a.run(ctx)
 }
 func (a *Agent) run(pCtx context.Context) error {
@@ -76,9 +103,16 @@ func (a *Agent) run(pCtx context.Context) error {
 			ctx, cancel := context.WithCancel(pCtx)
 
 			a.mutex.RLock()
-			headers.Set("Authorization", a.JWTToken)
+			headers.Set("Authorization", a.config.Token)
 			a.mutex.RUnlock()
-			err = a.client.ConnectContext(ctx, master, headers)
+			u, err := hostToWs(master)
+			if err != nil {
+				logrus.Error(err)
+				cancel()
+				continue
+			}
+
+			err = a.client.ConnectContext(ctx, u, headers)
 			if err != nil {
 				logrus.Error(err)
 			}
@@ -104,9 +138,10 @@ func (a *Agent) run(pCtx context.Context) error {
 
 func (a *Agent) findMasterForConnection(ctx context.Context) string {
 	for {
-		for _, master := range a.Masters {
+		for _, master := range a.config.Masters {
 			err := a.isMasterAlive(master)
 			if err != nil {
+				logrus.Error("master not alive:", err)
 				continue
 			}
 			return master
@@ -156,10 +191,11 @@ func (a *Agent) isMasterAlive(master string) error {
 		return err
 	}
 
-	// TODO save masters to local config
-	fmt.Println("got hosts from up-v1")
-	for _, m := range data.Masters {
-		fmt.Println(hostToWs(m))
+	// Save the new config to configfile
+	a.config.Masters = data.Masters
+	err = config.ToFile(a.configFile, a.config)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -197,25 +233,32 @@ func hostToWs(master string) (string, error) {
 	return u.String(), nil
 }
 
-func (a *Agent) onMachineAccepted(b json.RawMessage) error {
+func (a *Agent) onMachineAccepted(msg *protocol.WebsocketMessage) error {
 	var token string
-	err := json.Unmarshal(b, &token)
+	err := json.Unmarshal(msg.Body, &token)
 	if err != nil {
 		return err
 	}
 
 	a.mutex.Lock()
-	// TODO we must save the token to config file on disk.
-	a.JWTToken = token
+	a.config.Token = token
 	a.mutex.Unlock()
+
+	err = config.ToFile(a.configFile, a.config)
+	if err != nil {
+		return err
+	}
+
 	return a.client.Close() // force reconnect
 }
 
-func (a *Agent) onMachineUpdate(b json.RawMessage) error {
+func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
+	// TODO if msg.Source is protocol.ManualSource and manifest has annotation gcm.io/ignore = "true"
+	// then save local state and config on disk that we ignore git updates until the annotation is removed.
 	recon := &reconciliation.MachineReconciler{}
 
 	machine := &types.Machine{}
-	err := json.Unmarshal(b, machine)
+	err := json.Unmarshal(msg.Body, machine)
 	if err != nil {
 		return err
 	}
@@ -239,7 +282,7 @@ func (a *Agent) reader(ctx context.Context) {
 			}
 			cbs := a.getCallbacks()
 			for _, cb := range cbs[msg.Type] {
-				err := cb(msg.Body)
+				err := cb(msg)
 				if err != nil {
 					logrus.Error(err)
 					continue
