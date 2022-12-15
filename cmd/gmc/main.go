@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/admin"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master"
 	"github.com/sirupsen/logrus"
@@ -151,9 +152,15 @@ func app() *cli.App {
 			},
 		},
 		{
-			Name:   "exec",
-			Usage:  "executes an adhoc command on multiple machines.",
-			Action: nil,
+			Name:  "exec",
+			Usage: "executes an adhoc command on multiple machines.",
+			Action: func(c *cli.Context) error {
+				if c.Args().Len() != 1 {
+					return fmt.Errorf(`expected arg as one string. Example gmc exec "cat /etc/hosts"`)
+				}
+				admin := admin.NewAdminFromContext(c)
+				return admin.Exec(c.Context, c.Args().First())
+			},
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					// this is the client for SREs so it needs to have a config somewhere.
@@ -180,9 +187,12 @@ func app() *cli.App {
 			},
 		},
 		{
-			Name:   "apply",
-			Usage:  `applies a directory of manifests to hosts. Useful for local development. Will be overridden by git source if not annotated with gcm.io/ignore="true"`,
-			Action: nil,
+			Name:  "apply",
+			Usage: `applies a directory of manifests to hosts. Useful for local development. Will be overridden by git source if not annotated with gcm.io/ignore="true"`,
+			Action: func(c *cli.Context) error {
+				admin := admin.NewAdminFromContext(c)
+				return admin.Apply(c.Context)
+			},
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					// this is the client for SREs so it needs to have a config somewhere.
@@ -191,7 +201,6 @@ func app() *cli.App {
 					Value:   defaultConfigLocation(),
 					Usage:   "config file location. contains info about the master urls",
 				},
-				// TODO implement selector with k8s code func ParseToLabelSelector https://github.com/kubernetes/apimachinery/blob/7fb78ee962897d9de6bac4a8f0f1346eb1480ac4/pkg/apis/meta/v1/helpers.go#L105
 				&cli.StringFlag{
 					Name:    "selector",
 					Aliases: []string{"l"},
@@ -210,9 +219,12 @@ func app() *cli.App {
 			},
 		},
 		{
-			Name:   "bootstrap",
-			Usage:  "installs the agent on a new machine.",
-			Action: nil,
+			Name:  "bootstrap",
+			Usage: "installs the agent on a new machine.",
+			Action: func(c *cli.Context) error {
+				admin := admin.NewAdminFromContext(c)
+				return admin.Bootstrap(c.Context)
+			},
 			Flags: []cli.Flag{
 				&cli.StringFlag{
 					// this is the client for SREs so it needs to have a config somewhere.

@@ -3,6 +3,7 @@ package reconciliation
 import (
 	"fmt"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/command"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 )
 
@@ -47,13 +48,13 @@ func (mr *MachineReconciler) unitNeedsTrigger(systemd *types.SystemdReference) {
 
 func (mr *MachineReconciler) runSystemdTriggers() error {
 	if mr.daemonReloadNeeded {
-		_, _, err := runCommand("systemctl daemon reload")
+		_, _, err := command.Run("systemctl daemon reload")
 		if err != nil {
 			return err
 		}
 	}
 	for name, action := range mr.restartUnits {
-		_, _, err := runCommand(fmt.Sprintf("systemctl %s %s", action, name))
+		_, _, err := command.Run(fmt.Sprintf("systemctl %s %s", action, name))
 		if err != nil {
 			return err
 		}

@@ -1,4 +1,4 @@
-package agent
+package websocket
 
 import (
 	"context"
@@ -59,7 +59,7 @@ type websocketClient struct {
 }
 
 // New creates a new Websocket.
-func New() Websocket {
+func NewWebsocketClient() Websocket {
 	return &websocketClient{
 		writeJSON:    make(chan writeCh),
 		writeMessage: make(chan writeCh),
@@ -89,7 +89,7 @@ func (ws *websocketClient) getOnConnect() func() {
 func (ws *websocketClient) ConnectContext(ctx context.Context, addr string, headers http.Header) error {
 	var err error
 	var c *websocket.Conn
-	logrus.Info("websocket: connecting to ", addr)
+	logrus.Debugf("websocket: connecting to %s", addr)
 	if ws.tlsClientConfig != nil {
 		dialer := &websocket.Dialer{
 			Proxy:            http.ProxyFromEnvironment,
@@ -104,7 +104,7 @@ func (ws *websocketClient) ConnectContext(ctx context.Context, addr string, head
 		ws.wasDisconnected(err)
 		return err
 	}
-	logrus.Infof("websocket: connected to %s", addr)
+	logrus.Debugf("websocket: connected to %s", addr)
 	ws.wasConnected()
 	ws.Lock()
 	ws.conn = c
@@ -127,11 +127,11 @@ func (ws *websocketClient) Read() <-chan []byte {
 }
 
 func (ws *websocketClient) WriteMessage(messageType int, data []byte) error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error)
 
 	delay := time.NewTimer(time.Millisecond * 10)
 	select {
-	case ws.writeMessage <- writeCh{typ: messageType, data: data}:
+	case ws.writeMessage <- writeCh{errCh: errCh, typ: messageType, data: data}:
 		if !delay.Stop() {
 			<-delay.C
 		}
@@ -143,7 +143,7 @@ func (ws *websocketClient) WriteMessage(messageType int, data []byte) error {
 
 // WriteJSON writes interface{} encoded as JSON to our connection.
 func (ws *websocketClient) WriteJSON(v interface{}) error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error)
 	delay := time.NewTimer(time.Millisecond * 10)
 	select {
 	case ws.writeJSON <- writeCh{errCh: errCh, body: v}:

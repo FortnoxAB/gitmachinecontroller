@@ -17,16 +17,20 @@ func New(key string) *JWTHandler {
 	}
 }
 
-type Claim struct {
-	Host    string `json:"host"`
-	Allowed bool   `json:"allowed"`
+type Claims struct {
+	// Host is the hostname of an agent
+	Host string `json:"host"`
+	// Allowed controls if agent is allowd to get git config from master
+	Allowed bool `json:"allowed"`
+	// Admin is allowed to do apply and exec commands
+	Admin bool `json:"admin"`
 	jwt.StandardClaims
 }
 
-func (j *JWTHandler) ValidateToken(signedToken string) (*Claim, error) {
+func (j *JWTHandler) ValidateToken(signedToken string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(
 		signedToken,
-		&Claim{},
+		&Claims{},
 		func(token *jwt.Token) (interface{}, error) {
 			return []byte(j.key), nil
 		},
@@ -39,7 +43,7 @@ func (j *JWTHandler) ValidateToken(signedToken string) (*Claim, error) {
 		return nil, fmt.Errorf("token not valid")
 	}
 
-	claims, ok := token.Claims.(*Claim)
+	claims, ok := token.Claims.(*Claims)
 	if !ok {
 		return nil, fmt.Errorf("couldn't parse claims: ")
 	}
@@ -50,16 +54,36 @@ func (j *JWTHandler) ValidateToken(signedToken string) (*Claim, error) {
 	return claims, nil
 }
 
-func (j *JWTHandler) GenerateJWT(hostname string) (tokenString string, err error) {
+func (j *JWTHandler) GenerateJWT(claims *Claims) (tokenString string, err error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err = token.SignedString(j.key)
+	return
+}
+
+func DefaultClaims(opts ...OptionsFunc) *Claims {
 	expirationTime := time.Now().Add(24 * time.Hour)
-	claims := &Claim{
-		Host:    hostname,
+	claim := &Claims{
 		Allowed: true,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expirationTime.Unix(),
 		},
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err = token.SignedString(j.key)
-	return
+
+	for _, o := range opts {
+		o(claim)
+	}
+	return claim
+}
+
+type OptionsFunc func(*Claims)
+
+func OptionHostname(name string) OptionsFunc {
+	return func(claim *Claims) {
+		claim.Host = name
+	}
+}
+func OptionAdmin() OptionsFunc {
+	return func(claim *Claims) {
+		claim.Admin = true
+	}
 }

@@ -6,12 +6,16 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sync"
 	"time"
 
 	"github.com/fluxcd/pkg/git"
@@ -33,6 +37,38 @@ TODO
 	* how to ensure clients fetches from the current leader?
 
 */
+
+type websocketRequestResponse struct {
+	list  map[string]chan *websocketRequest
+	mutex *sync.RWMutex
+}
+
+var requestResponseStore = &websocketRequestResponse{
+	list:  make(map[string]chan *websocketRequest),
+	mutex: &sync.RWMutex{},
+}
+
+func (r *websocketRequestResponse) Done(reqID string) {
+	r.mutex.Lock()
+	delete(r.list, reqID)
+	r.mutex.Unlock()
+}
+
+func (r *websocketRequestResponse) WaitForResponse(reqID string) chan *websocketRequest {
+	if ch := r.Ch(reqID); ch != nil {
+		return ch
+	}
+	ch := make(chan *websocketRequest)
+	r.mutex.Lock()
+	r.list[reqID] = ch
+	r.mutex.Unlock()
+	return ch
+}
+func (r *websocketRequestResponse) Ch(reqID string) chan *websocketRequest {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	return r.list[reqID]
+}
 
 type Master struct {
 	GitURL            string
@@ -77,6 +113,12 @@ func (m *Master) Run(ctx context.Context) error {
 
 	return m.run(ctx)
 }
+
+type websocketRequest struct {
+	Request *protocol.WebsocketMessage
+	Sess    *melody.Session
+}
+
 func (m *Master) run(ctx context.Context) error {
 	u, err := url.Parse(m.GitURL)
 	if err != nil {
@@ -100,11 +142,15 @@ func (m *Master) run(ctx context.Context) error {
 	ticker := time.NewTicker(m.GitPollInterval)
 
 	manifestCh := make(chan *types.Machine)
+	syncCh := make(chan *types.Machine)
+	websocketCh := make(chan *websocketRequest)
+	go m.actionRunner(ctx, syncCh, websocketCh)
 	go func() {
 		/* TODO */
 		for {
 			select {
 			case manifest := <-manifestCh:
+				syncCh <- manifest
 				// TODO template most string values to support secrets?
 				msg, err := protocol.NewMachineUpdate(protocol.GitSource, manifest)
 				if err != nil {
@@ -112,11 +158,12 @@ func (m *Master) run(ctx context.Context) error {
 					continue
 				}
 				err = m.webserver.Websocket.BroadcastFilter(msg, func(s *melody.Session) bool {
-					logrus.Debug("sending")
-					if host, exists := s.Get("host"); exists && host.(string) != manifest.Metadata.Name {
+					host, exists := s.Get("host")
+					if exists && host.(string) != manifest.Metadata.Name {
 						return false
 					}
 					if a, exists := s.Get("allowed"); exists && a.(bool) {
+						logrus.Debugf("sending machine config to host %s", host.(string))
 						return true
 					}
 					return false
@@ -131,6 +178,14 @@ func (m *Master) run(ctx context.Context) error {
 			}
 		}
 	}()
+
+	m.webserver.Websocket.HandleMessage(func(sess *melody.Session, msg []byte) {
+		err := m.handleMessage(sess, msg, websocketCh)
+		if err != nil {
+			logrus.Error(err)
+			return
+		}
+	})
 
 	err = m.clone(ctx, authOpts, cloneOpts, manifestCh)
 	if err != nil {
@@ -159,6 +214,155 @@ func (m *Master) run(ctx context.Context) error {
 	// cloneOpts.Tag = ref.Tag
 	// cloneOpts.SemVer = ref.SemVer
 	// }
+}
+
+func (m *Master) handleMessage(sess *melody.Session, msg []byte, websocketCh chan *websocketRequest) error {
+	pkt, err := protocol.ParseMessage(msg)
+	if err != nil {
+		return err
+	}
+	websocketCh <- &websocketRequest{
+		Request: pkt,
+		Sess:    sess,
+	}
+	return nil
+}
+
+func (m *Master) actionRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest) {
+	machines := make(map[string]*types.Machine)
+	for {
+		select {
+		case request := <-websocketCh:
+			err := m.handleRequest(ctx, request.Sess, request)
+			if err != nil {
+				logrus.Error(err)
+			}
+
+		case machine := <-ch:
+			machines[machine.Metadata.Name] = machine
+		case <-ctx.Done():
+			logrus.Debug("stopping actionRunner")
+			return
+		}
+	}
+}
+
+func (m *Master) handleRequest(ctx context.Context, sess *melody.Session, r *websocketRequest) error {
+	switch r.Request.Type {
+	case "run-command-request":
+		cmdReq := &protocol.RunCommandRequest{}
+		err := json.Unmarshal(r.Request.Body, cmdReq)
+		if err != nil {
+			return err
+		}
+
+		logrus.Info("we will run command", cmdReq.Command)
+
+		msg, err := protocol.NewMessage("run-command", cmdReq.Command)
+		if err != nil {
+			return err
+		}
+
+		msg.RequestID = r.Request.RequestID
+		b, err := msg.Encode()
+		if err != nil {
+			return err
+		}
+
+		// TODO move this FilterSessions to function
+		rege, err := regexp.Compile(cmdReq.Regexp)
+		if err != nil {
+			return err
+		}
+		sessions, err := m.webserver.Websocket.Sessions()
+		sendTo := []*melody.Session{}
+		for _, s := range sessions {
+			if a, _ := s.Get("allowed"); !a.(bool) {
+				continue
+			}
+			host, _ := s.Get("host")
+			// TODO labelselector aswell
+			// TODO implement selector with k8s code func ParseToLabelSelector https://github.com/kubernetes/apimachinery/blob/7fb78ee962897d9de6bac4a8f0f1346eb1480ac4/pkg/apis/meta/v1/helpers.go#L105
+			if cmdReq.Regexp == "" {
+				sendTo = append(sendTo, s)
+				continue
+			}
+			if rege.MatchString(host.(string)) {
+				sendTo = append(sendTo, s)
+			}
+		}
+
+		max := len(sendTo)
+		if max == 0 {
+			return fmt.Errorf("found zero hosts to send command to")
+		}
+		go func() {
+			i := -1
+			for {
+				i++
+				if i >= max {
+					requestResponseStore.Done(r.Request.RequestID)
+					logrus.Debug("got all the responses")
+					return
+				}
+				select {
+				case resp := <-requestResponseStore.WaitForResponse(r.Request.RequestID):
+					cmdRes := &protocol.CommandResult{}
+					err := json.Unmarshal(resp.Request.Body, cmdRes)
+					if err != nil {
+						logrus.Error(err)
+						return
+					}
+
+					host, ok := resp.Sess.Get("host")
+					if !ok {
+						logrus.Error("did not find host field in the ws session")
+					}
+					logrus.Tracef("response from %s was %s", host.(string), cmdRes)
+					resp.Request.From = host.(string)
+					d, err := json.Marshal(resp.Request)
+					if err != nil {
+						logrus.Error(err)
+						return
+					}
+
+					err = sess.Write(d)
+					if err != nil {
+						logrus.Error(err)
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		sendExpectedReadCount(sess, r.Request.RequestID, max)
+
+		requestResponseStore.WaitForResponse(r.Request.RequestID)
+		err = m.webserver.Websocket.BroadcastMultiple(b, sendTo)
+		if err != nil {
+			return err
+		}
+
+	case "command-result":
+		ch := requestResponseStore.Ch(r.Request.RequestID)
+		if ch == nil {
+			return fmt.Errorf("no one is waiting for response")
+		}
+		ch <- r
+	}
+	return nil
+}
+
+func sendExpectedReadCount(sess *melody.Session, reqID string, cnt int) error {
+	resultCoutnMsg, err := protocol.NewMessage("expected-result-count", cnt)
+	if err != nil {
+		return err
+	}
+	resultCoutnMsg.RequestID = reqID
+	resCnt, err := resultCoutnMsg.Encode()
+	return sess.Write(resCnt)
 }
 
 func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan *types.Machine) error {
@@ -198,7 +402,12 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 			logrus.Errorf("error yaml parse: %s err: %s", path, err)
 			continue
 		}
-		manifestCh <- machine
+		select {
+		case manifestCh <- machine:
+		case <-ctx.Done():
+			logrus.Debug("stopping clone")
+			return nil
+		}
 	}
 	return nil
 }

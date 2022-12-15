@@ -17,6 +17,7 @@ type WebsocketMessage struct {
 	Type      string          `json:"type"`
 	RequestID string          `json:"requestId"`
 	Source    Source          `json:"source"`
+	From      string          `json:"from"`
 	Body      json.RawMessage `json:"body"`
 }
 
@@ -69,4 +70,32 @@ func ParseMessage(msg []byte) (*WebsocketMessage, error) {
 	data := &WebsocketMessage{}
 	err := json.Unmarshal(msg, data)
 	return data, err
+}
+
+type CommandResult struct {
+	Stdout string
+	Stderr string
+}
+
+func NewCommandResult(requestId, Stdout, Stderr string) (*WebsocketMessage, error) {
+	res := &CommandResult{
+		Stdout: Stdout,
+		Stderr: Stderr,
+	}
+	b, err := json.Marshal(res)
+	if err != nil {
+		return nil, err
+	}
+
+	return &WebsocketMessage{
+		Type:      "command-result",
+		RequestID: requestId,
+		Body:      b,
+	}, nil
+}
+
+type RunCommandRequest struct {
+	Command       string
+	LabelSelector string
+	Regexp        string
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"html/template"
+	"net"
 	"net/http"
 	"time"
 
@@ -25,10 +26,12 @@ type Webserver struct {
 }
 
 func New(port, jwtKey string, masters []string) *Webserver {
+	m := melody.New()
+	m.Config.MaxMessageSize = 32 << 20 // 32MB
 	return &Webserver{
 		Port:      port,
 		Masters:   masters,
-		Websocket: melody.New(),
+		Websocket: m,
 		jwt:       jwt.New(jwtKey),
 	}
 }
@@ -49,10 +52,47 @@ func (ws *Webserver) Init() *gin.Engine {
 	router.POST("/api/pending-machines/accept-v1", err(ws.approveMachine))
 	router.GET("/api/up-v1", err(ws.listMasters))
 
+	router.POST("/api/admin-v1", err(ws.createAdmin))
+
 	ws.initWS(router)
 
 	pprof.Register(router)
 	return router
+}
+
+// func (ws *Webserver) OnWsMsg(fn func(*melody.Session, []byte)) {
+// 	ws.Websocket.HandleMessage(fn)
+// }
+
+// createAdmin is only allowed to access from localhost or with existing admin JWT.
+func (ws *Webserver) createAdmin(c *gin.Context) error {
+	ipStr, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err != nil {
+		return err
+	}
+
+	isAdmin := false
+	if tokenString := c.Request.Header.Get("Authorization"); tokenString != "" {
+		claims, err := ws.jwt.ValidateToken(tokenString)
+		if err != nil {
+			c.AbortWithError(http.StatusUnauthorized, err)
+			return nil
+		}
+		isAdmin = claims.Admin
+	}
+	ip := net.ParseIP(ipStr)
+	if !ip.IsLoopback() && !isAdmin {
+		c.AbortWithError(http.StatusUnauthorized, err)
+		return nil
+	}
+
+	claims := jwt.DefaultClaims(jwt.OptionAdmin())
+	token, err := ws.jwt.GenerateJWT(claims)
+	if err != nil {
+		return err
+	}
+	c.JSON(http.StatusOK, gin.H{"jwt": token})
+	return nil
 }
 
 func (ws *Webserver) listMasters(c *gin.Context) error {
@@ -61,6 +101,7 @@ func (ws *Webserver) listMasters(c *gin.Context) error {
 }
 
 func (ws *Webserver) approveMachine(c *gin.Context) error {
+	// TODO check admin JWT here
 	type respStruct struct {
 		Host string
 	}
@@ -77,7 +118,7 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 	for _, sess := range sessions {
 		if host, ok := sess.Get("host"); ok && host.(string) == resp.Host {
 			logrus.Infof("approved %s", resp.Host)
-			token, err := ws.jwt.GenerateJWT(resp.Host)
+			token, err := ws.jwt.GenerateJWT(jwt.DefaultClaims(jwt.OptionHostname(resp.Host)))
 			if err != nil {
 				logrus.Error(err)
 				continue
@@ -102,6 +143,7 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 // TODO AUTH HÄR OXÅ! hur ska SRE autha sig? Bara med cli o hämta jtw över ssh kanske?
 // webserver kanska bara ska lyssna på localhost till en början så måste man ssh proxya?
 func (ws *Webserver) listPendingMachines(c *gin.Context) error {
+	// TODO check admin JWT here
 	t := `<!DOCTYPE html>
 <html lang="en">
 <body>
@@ -174,7 +216,6 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 
 		tokenString := c.Request.Header.Get("Authorization")
 		if tokenString == "" {
-			// TODO do we want to validate src IP compared to the git manifest here?
 			hostname := c.Request.Header.Get("X-hostname")
 			if hostname == "" {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -182,6 +223,7 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 			}
 			keys["host"] = hostname
 		} else {
+			// TODO validate src IP compared to the git manifest here?
 			claims, err := ws.jwt.ValidateToken(tokenString)
 			if err != nil {
 				c.AbortWithError(http.StatusUnauthorized, err)
@@ -207,7 +249,7 @@ func (ws *Webserver) Start(ctx context.Context) {
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logrus.Error(err)
+			logrus.Fatalf("error starting webserver %s", err)
 		}
 	}()
 

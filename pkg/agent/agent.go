@@ -5,17 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/command"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/reconciliation"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/build"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/websocket"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 )
@@ -30,7 +31,7 @@ type Agent struct {
 	FakeHostname string
 	wg           *sync.WaitGroup
 	callbacks    map[string][]OnFunc
-	client       Websocket
+	client       websocket.Websocket
 	mutex        sync.RWMutex
 	config       *config.Config
 	configFile   string
@@ -45,7 +46,7 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		FakeHostname: c.String("fake-hostname"),
 		wg:           &sync.WaitGroup{},
 		callbacks:    make(map[string][]OnFunc),
-		client:       New(),
+		client:       websocket.NewWebsocketClient(),
 	}
 	return m
 }
@@ -105,7 +106,7 @@ func (a *Agent) run(pCtx context.Context) error {
 			a.mutex.RLock()
 			headers.Set("Authorization", a.config.Token)
 			a.mutex.RUnlock()
-			u, err := hostToWs(master)
+			u, err := websocket.ToWS(master)
 			if err != nil {
 				logrus.Error(err)
 				cancel()
@@ -119,10 +120,11 @@ func (a *Agent) run(pCtx context.Context) error {
 
 			select {
 			case <-pCtx.Done():
-				logrus.Info("Stopping reconnect loop because:", pCtx.Err())
+				logrus.Info("stopping reconnect loop because:", pCtx.Err())
 				cancel()
 				return
-			case <-a.client.Disconnected():
+			case err := <-a.client.Disconnected():
+				logrus.Errorf("websocket: disconnected: %s", err)
 				cancel()
 				// connect again!
 			}
@@ -131,6 +133,7 @@ func (a *Agent) run(pCtx context.Context) error {
 
 	a.On("machine-accepted", a.onMachineAccepted)
 	a.On("machine-update", a.onMachineUpdate)
+	a.On("run-command", a.onRunCommand)
 	go a.reader(pCtx)
 	a.wg.Wait()
 	return nil
@@ -166,7 +169,7 @@ func (a *Agent) isMasterAlive(master string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	u, err := wsToHost(master)
+	u, err := websocket.ToHTTP(master)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
@@ -201,38 +204,6 @@ func (a *Agent) isMasterAlive(master string) error {
 	return nil
 }
 
-func wsToHost(master string) (string, error) {
-	u, err := url.Parse(master)
-	if err != nil {
-		return "", err
-	}
-
-	if u.Scheme == "ws" {
-		u.Scheme = "http"
-	}
-	if u.Scheme == "wss" {
-		u.Scheme = "https"
-	}
-	u.Path = "/api/up-v1"
-	return u.String(), nil
-}
-
-func hostToWs(master string) (string, error) {
-	u, err := url.Parse(master)
-	if err != nil {
-		return "", err
-	}
-
-	if u.Scheme == "http" {
-		u.Scheme = "ws"
-	}
-	if u.Scheme == "https" {
-		u.Scheme = "wss"
-	}
-	u.Path = "/api/websocket-v1"
-	return u.String(), nil
-}
-
 func (a *Agent) onMachineAccepted(msg *protocol.WebsocketMessage) error {
 	var token string
 	err := json.Unmarshal(msg.Body, &token)
@@ -250,6 +221,28 @@ func (a *Agent) onMachineAccepted(msg *protocol.WebsocketMessage) error {
 	}
 
 	return a.client.Close() // force reconnect
+}
+func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
+	var cmd string
+	err := json.Unmarshal(msg.Body, &cmd)
+	if err != nil {
+		return err
+	}
+
+	stdout, stderr, err := command.Run(cmd)
+
+	resp, err := protocol.NewCommandResult(msg.RequestID, stdout, stderr)
+	if err != nil {
+		return err
+	}
+
+	err = a.WriteMessage(resp)
+	if err != nil {
+		return err
+	}
+
+	// return nil
+	return err
 }
 
 func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
@@ -272,7 +265,7 @@ func (a *Agent) reader(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logrus.Info("Stopping websocket reader because:", ctx.Err())
+			logrus.Debug("Stopping websocket reader because:", ctx.Err())
 			return
 		case data := <-a.client.Read():
 			msg, err := protocol.ParseMessage(data)
@@ -287,6 +280,11 @@ func (a *Agent) reader(ctx context.Context) {
 					logrus.Error(err)
 					continue
 				}
+			}
+			if cbs[msg.Type] == nil || len(cbs[msg.Type]) == 0 {
+				logrus.WithFields(logrus.Fields{
+					"type": msg.Type,
+				}).Warn("got message but no one cared")
 			}
 		}
 	}
@@ -319,7 +317,7 @@ func (a *Agent) WaitForMessage(msgType string, dst interface{}) error {
 func (a *Agent) WriteMessage(msg *protocol.WebsocketMessage) error {
 	logrus.WithFields(logrus.Fields{
 		"type": msg.Type,
-		"body": msg.Body,
+		"body": string(msg.Body),
 	}).Tracef("Send to server")
 	return a.client.WriteJSON(msg)
 }
