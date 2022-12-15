@@ -72,7 +72,7 @@ func writeContentIfNeeded(file *types.File) (bool, error) {
 		return false, err
 	}
 	if equal {
-		logrus.Info(file.Path, " already equal")
+		logrus.Debug(file.Path, " already equal")
 		return false, nil
 	}
 

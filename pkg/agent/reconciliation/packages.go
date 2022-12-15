@@ -3,6 +3,7 @@ package reconciliation
 import (
 	"fmt"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/command"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/sirupsen/logrus"
 )
@@ -25,7 +26,7 @@ func installPackage(pkg *types.Package) error {
 		name = pkg.Name
 	}
 
-	c, err := runCommandCode(fmt.Sprintf("rpm -q %s", name))
+	_, c, err := command.RunExpectCodes(fmt.Sprintf("rpm -q %s", name), 0, 1)
 	if err != nil {
 		return err
 	}
@@ -33,7 +34,7 @@ func installPackage(pkg *types.Package) error {
 		return nil
 	}
 	// also check provides if you are installing for example vim which provides vim-enhanced package.
-	c, err = runCommandCode(fmt.Sprintf("rpm -q --whatprovides %s", name))
+	_, c, err = command.RunExpectCodes(fmt.Sprintf("rpm -q --whatprovides %s", name), 0, 1)
 	if err != nil {
 		return err
 	}
@@ -41,6 +42,6 @@ func installPackage(pkg *types.Package) error {
 		return nil
 	}
 
-	_, _, err = runCommand(fmt.Sprintf("yum install -y %s", name))
+	_, _, err = command.Run(fmt.Sprintf("yum install -y %s", name))
 	return err
 }
