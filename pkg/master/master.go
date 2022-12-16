@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,6 +27,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 /*
@@ -84,6 +84,7 @@ type Master struct {
 	WsPort            string
 	Masters           []string
 	webserver         *webserver.Webserver
+	machineStateCh    chan types.MachineStateQuestion
 }
 
 func NewMasterFromContext(c *cli.Context) *Master {
@@ -108,7 +109,10 @@ func NewMasterFromContext(c *cli.Context) *Master {
 // gmc master --git-path "jsonnet/vms/manifests/main" --git-url "ssh://git@git.fnox.se:7999/fo/infra.git" --git-branch "feature/gitmachine" --git-identity-path /home/jonaz/.ssh/id_rsa --git-known-hosts-path /home/jonaz/.ssh/known_hosts --git-identity-passphrase asdfasdf
 
 func (m *Master) Run(ctx context.Context) error {
+	logrus.SetFormatter(&logrus.TextFormatter{TimestampFormat: time.RFC3339Nano, FullTimestamp: true})
+	m.machineStateCh = make(chan types.MachineStateQuestion)
 	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters)
+	m.webserver.MachineStateCh = m.machineStateCh
 	go m.webserver.Start(ctx)
 
 	return m.run(ctx)
@@ -144,7 +148,7 @@ func (m *Master) run(ctx context.Context) error {
 	manifestCh := make(chan *types.Machine)
 	syncCh := make(chan *types.Machine)
 	websocketCh := make(chan *websocketRequest)
-	go m.actionRunner(ctx, syncCh, websocketCh)
+	go m.stateRunner(ctx, syncCh, websocketCh)
 	go func() {
 		/* TODO */
 		for {
@@ -180,10 +184,20 @@ func (m *Master) run(ctx context.Context) error {
 	}()
 
 	m.webserver.Websocket.HandleMessage(func(sess *melody.Session, msg []byte) {
-		err := m.handleMessage(sess, msg, websocketCh)
+		pkt, err := protocol.ParseMessage(msg)
 		if err != nil {
 			logrus.Error(err)
 			return
+		}
+		host, ok := sess.Get("host")
+		if !ok {
+			logrus.Error("did not find host field in the ws session")
+			return
+		}
+		pkt.From = host.(string)
+		websocketCh <- &websocketRequest{
+			Request: pkt,
+			Sess:    sess,
 		}
 	})
 
@@ -216,38 +230,93 @@ func (m *Master) run(ctx context.Context) error {
 	// }
 }
 
-func (m *Master) handleMessage(sess *melody.Session, msg []byte, websocketCh chan *websocketRequest) error {
-	pkt, err := protocol.ParseMessage(msg)
-	if err != nil {
-		return err
-	}
-	websocketCh <- &websocketRequest{
-		Request: pkt,
-		Sess:    sess,
-	}
-	return nil
-}
-
-func (m *Master) actionRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest) {
-	machines := make(map[string]*types.Machine)
+func (m *Master) stateRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest) {
+	//TODO add timestamp and IP and make it accessable from /pending-machines to print all machines?
+	machines := make(map[string]*types.MachineState)
 	for {
 		select {
 		case request := <-websocketCh:
-			err := m.handleRequest(ctx, request.Sess, request)
+			err := m.handleRequest(ctx, machines, request.Sess, request)
 			if err != nil {
 				logrus.Error(err)
 			}
 
+		case req := <-m.machineStateCh:
+			req.ReplyCh <- machines
 		case machine := <-ch:
-			machines[machine.Metadata.Name] = machine
+			machines[machine.Metadata.Name] = &types.MachineState{
+				Metadata:   machine.Metadata,
+				IP:         machine.Spec.IP,
+				LastUpdate: time.Now(),
+			}
 		case <-ctx.Done():
-			logrus.Debug("stopping actionRunner")
+			logrus.Debug("stopping stateRunner")
 			return
 		}
 	}
 }
 
-func (m *Master) handleRequest(ctx context.Context, sess *melody.Session, r *websocketRequest) error {
+func (m *Master) filterSessions(machines map[string]*types.MachineState, rex, sel string) ([]*melody.Session, []string, error) {
+	rege, err := regexp.Compile(rex)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessions, err := m.webserver.Websocket.Sessions()
+	if err != nil {
+		return nil, nil, err
+	}
+	sendTo := []*melody.Session{}
+
+	filteredMachines := make(map[string]bool)
+	for _, m := range machines {
+		if rex == "" && sel == "" {
+			filteredMachines[m.Metadata.Name] = false
+			continue
+		}
+		// regexp filter
+		if rex != "" && rege.MatchString(m.Metadata.Name) {
+			filteredMachines[m.Metadata.Name] = false
+		}
+
+		// labelselector filter
+		if sel != "" {
+			selector, err := labels.Parse(sel)
+			if err != nil {
+				return nil, nil, err
+			}
+			if selector.Matches(m.Metadata.Labels) {
+				filteredMachines[m.Metadata.Name] = false
+			}
+		}
+	}
+
+	for _, s := range sessions {
+		if a, _ := s.Get("allowed"); !a.(bool) {
+			continue
+		}
+		h, _ := s.Get("host")
+		host := h.(string)
+		if host == "" {
+			continue // only send to agents which has host set and not admin sessions.
+		}
+		if _, ok := filteredMachines[host]; !ok {
+			// we are not filtered
+			continue
+		}
+		filteredMachines[host] = true // session is alive
+		sendTo = append(sendTo, s)
+	}
+	offline := []string{}
+	for host, online := range filteredMachines {
+		if !online {
+			offline = append(offline, host)
+		}
+	}
+
+	return sendTo, offline, nil
+}
+
+func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.MachineState, sess *melody.Session, r *websocketRequest) error {
 	switch r.Request.Type {
 	case "run-command-request":
 		cmdReq := &protocol.RunCommandRequest{}
@@ -256,7 +325,7 @@ func (m *Master) handleRequest(ctx context.Context, sess *melody.Session, r *web
 			return err
 		}
 
-		logrus.Info("we will run command", cmdReq.Command)
+		logrus.Infof("we will run command: %s", cmdReq.Command)
 
 		msg, err := protocol.NewMessage("run-command", cmdReq.Command)
 		if err != nil {
@@ -269,57 +338,51 @@ func (m *Master) handleRequest(ctx context.Context, sess *melody.Session, r *web
 			return err
 		}
 
-		// TODO move this FilterSessions to function
-		rege, err := regexp.Compile(cmdReq.Regexp)
+		sendTo, offline, err := m.filterSessions(machines, cmdReq.Regexp, cmdReq.LabelSelector)
 		if err != nil {
 			return err
 		}
-		sessions, err := m.webserver.Websocket.Sessions()
-		sendTo := []*melody.Session{}
-		for _, s := range sessions {
-			if a, _ := s.Get("allowed"); !a.(bool) {
-				continue
-			}
-			host, _ := s.Get("host")
-			// TODO labelselector aswell
-			// TODO implement selector with k8s code func ParseToLabelSelector https://github.com/kubernetes/apimachinery/blob/7fb78ee962897d9de6bac4a8f0f1346eb1480ac4/pkg/apis/meta/v1/helpers.go#L105
-			if cmdReq.Regexp == "" {
-				sendTo = append(sendTo, s)
-				continue
-			}
-			if rege.MatchString(host.(string)) {
-				sendTo = append(sendTo, s)
-			}
-		}
 
-		max := len(sendTo)
+		onlineLen := len(sendTo)
+		max := onlineLen + len(offline)
+		logrus.Debugf("will send command request to cnt: %d", max)
+		logrus.Debugf("offline machines: %#v", offline)
+		sendExpectedReadCount(sess, r.Request.RequestID, max)
+
 		if max == 0 {
 			return fmt.Errorf("found zero hosts to send command to")
 		}
+
+		for _, host := range offline {
+			b, err := protocol.NewCommandResult(msg.RequestID, &protocol.CommandResult{
+				Online: false,
+			})
+			if err != nil {
+				return err
+			}
+			b.From = host
+			msg, err := b.Encode()
+			if err != nil {
+				return err
+			}
+
+			err = sess.Write(msg)
+			if err != nil {
+				return err
+			}
+		}
+
 		go func() {
+			defer requestResponseStore.Done(r.Request.RequestID)
 			i := -1
 			for {
 				i++
-				if i >= max {
-					requestResponseStore.Done(r.Request.RequestID)
+				if i >= onlineLen {
 					logrus.Debug("got all the responses")
 					return
 				}
 				select {
 				case resp := <-requestResponseStore.WaitForResponse(r.Request.RequestID):
-					cmdRes := &protocol.CommandResult{}
-					err := json.Unmarshal(resp.Request.Body, cmdRes)
-					if err != nil {
-						logrus.Error(err)
-						return
-					}
-
-					host, ok := resp.Sess.Get("host")
-					if !ok {
-						logrus.Error("did not find host field in the ws session")
-					}
-					logrus.Tracef("response from %s was %s", host.(string), cmdRes)
-					resp.Request.From = host.(string)
 					d, err := json.Marshal(resp.Request)
 					if err != nil {
 						logrus.Error(err)
@@ -336,8 +399,6 @@ func (m *Master) handleRequest(ctx context.Context, sess *melody.Session, r *web
 				}
 			}
 		}()
-
-		sendExpectedReadCount(sess, r.Request.RequestID, max)
 
 		requestResponseStore.WaitForResponse(r.Request.RequestID)
 		err = m.webserver.Websocket.BroadcastMultiple(b, sendTo)
@@ -377,14 +438,12 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 	}
 	defer gitClient.Close()
 
-	log.Println("clone")
-
 	// TODO context timeout here.
 	commit, err := gitClient.Clone(ctx, m.GitURL, cloneOpts)
 	if err != nil {
 		return err
 	}
-	log.Println("cloned", commit)
+	logrus.Debugf("cloned %s from %s", commit, m.GitURL)
 
 	files, err := os.ReadDir(filepath.Join(dir, m.GitPath))
 

@@ -2,8 +2,10 @@ package jwt
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 )
 
@@ -22,6 +24,8 @@ type Claims struct {
 	Host string `json:"host"`
 	// Allowed controls if agent is allowd to get git config from master
 	Allowed bool `json:"allowed"`
+
+	AllowedIP string `json:"allowedIp"`
 	// Admin is allowed to do apply and exec commands
 	Admin bool `json:"admin"`
 	jwt.StandardClaims
@@ -60,6 +64,23 @@ func (j *JWTHandler) GenerateJWT(claims *Claims) (tokenString string, err error)
 	return
 }
 
+func (j *JWTHandler) Middleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokenString := c.Request.Header.Get("Authorization")
+		claims, err := j.ValidateToken(tokenString)
+		if err != nil {
+			c.AbortWithError(http.StatusUnauthorized, err)
+			return
+		}
+		if !claims.Admin {
+			c.AbortWithError(http.StatusUnauthorized, err)
+			return
+		}
+
+		c.Next()
+	}
+}
+
 func DefaultClaims(opts ...OptionsFunc) *Claims {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claim := &Claims{
@@ -80,6 +101,11 @@ type OptionsFunc func(*Claims)
 func OptionHostname(name string) OptionsFunc {
 	return func(claim *Claims) {
 		claim.Host = name
+	}
+}
+func OptionAllowedIP(ip string) OptionsFunc {
+	return func(claim *Claims) {
+		claim.AllowedIP = ip
 	}
 }
 func OptionAdmin() OptionsFunc {

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -58,7 +57,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			conf = &config.Config{
-				Masters: []string{a.Master},
+				Masters: config.Masters{config.Master(a.Master)},
 			}
 			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {
@@ -96,7 +95,7 @@ func (a *Agent) run(pCtx context.Context) error {
 	go func() {
 		defer a.wg.Done()
 		for {
-			master := a.findMasterForConnection(pCtx)
+			master := a.config.FindMasterForConnection(pCtx)
 
 			if pCtx.Err() != nil {
 				return
@@ -139,71 +138,6 @@ func (a *Agent) run(pCtx context.Context) error {
 	return nil
 }
 
-func (a *Agent) findMasterForConnection(ctx context.Context) string {
-	for {
-		for _, master := range a.config.Masters {
-			err := a.isMasterAlive(master)
-			if err != nil {
-				logrus.Error("master not alive:", err)
-				continue
-			}
-			return master
-		}
-		if ctx.Err() != nil {
-			return ""
-		}
-
-		logrus.Error("found no working master will sleep 10 seconds and try again")
-		delay := time.NewTimer(time.Second * 10)
-		select {
-		case <-delay.C:
-		case <-ctx.Done():
-			if !delay.Stop() {
-				<-delay.C
-			}
-			return ""
-		}
-	}
-}
-func (a *Agent) isMasterAlive(master string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	u, err := websocket.ToHTTP(master)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
-	}
-
-	data := &struct {
-		Masters []string
-	}{}
-
-	err = json.NewDecoder(resp.Body).Decode(data)
-	if err != nil {
-		return err
-	}
-
-	// Save the new config to configfile
-	a.config.Masters = data.Masters
-	err = config.ToFile(a.configFile, a.config)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (a *Agent) onMachineAccepted(msg *protocol.WebsocketMessage) error {
 	var token string
 	err := json.Unmarshal(msg.Body, &token)
@@ -231,7 +165,12 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 
 	stdout, stderr, err := command.Run(cmd)
 
-	resp, err := protocol.NewCommandResult(msg.RequestID, stdout, stderr)
+	resp, err := protocol.NewCommandResult(msg.RequestID, &protocol.CommandResult{
+		Stdout: stdout,
+		Stderr: stderr,
+		Online: true,
+		// TODO Code: code,
+	})
 	if err != nil {
 		return err
 	}

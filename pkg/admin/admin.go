@@ -3,11 +3,21 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
@@ -33,7 +43,6 @@ type Admin struct {
 }
 
 func NewAdminFromContext(c *cli.Context) *Admin {
-	fmt.Printf("%#v\n", c.Args().Slice())
 	return &Admin{
 		configFile: c.String("config"),
 		selector:   c.String("selector"),
@@ -53,7 +62,10 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 	headers.Set("Authorization", conf.Token)
 
 	wsClient := websocket.NewWebsocketClient()
-	u, err := websocket.ToWS(conf.Masters[0]) // TODO all masters using "findMasterForConnection"
+
+	master := conf.FindMasterForConnection(ctx)
+
+	u, err := websocket.ToWS(master)
 	if err != nil {
 		return err
 	}
@@ -103,6 +115,10 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 						logrus.Error(err)
 						return
 					}
+					if cnt == 0 {
+						logrus.Error("found no machines online on master")
+						return
+					}
 					expectedReadCount = cnt
 					continue
 				}
@@ -119,8 +135,13 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 					logrus.Error("error reading command result:", err)
 					continue
 				}
-				green := color.New(color.FgGreen).SprintFunc()
-				fmt.Printf("%s:\n%s\n\n", green(msg.From), cmdRes.Stdout)
+				if cmdRes.Online {
+					green := color.New(color.FgGreen).SprintFunc()
+					fmt.Printf("%s:\n%s\n\n", green(msg.From), cmdRes.Stdout)
+				} else {
+					red := color.New(color.FgRed).SprintFunc()
+					fmt.Printf("%s (offline):\n%s\n\n", red(msg.From), cmdRes.Stdout)
+				}
 
 				if readCount >= expectedReadCount {
 					return
@@ -156,12 +177,62 @@ func (a *Admin) Bootstrap(ctx context.Context) error {
 	fmt.Println(conf)
 	return nil
 }
+func (a *Admin) Proxy(ctx context.Context) error {
+	conf, err := a.config()
+	if err != nil {
+		return err
+	}
+
+	target, err := url.Parse(conf.FindMasterForConnection(ctx))
+	target.RawQuery = ""
+	target.Path = ""
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.Header.Set("Authorization", conf.Token)
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			logrus.Infof("proxy to %s", req.URL.String())
+		},
+	}
+	srv := &http.Server{
+		ReadTimeout:       1 * time.Second,
+		WriteTimeout:      1 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
+		Handler:           proxy,
+	}
+	go func() {
+		port := 8080
+		for {
+			srv.Addr = ":" + strconv.Itoa(port)
+			logrus.Infof("listening on https://%s", srv.Addr)
+			if err := listenAndServe(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				if isErrorAddressAlreadyInUse(err) {
+					logrus.Errorf("error starting proxy: %s", err)
+					port++
+					continue
+				}
+				logrus.Fatalf("error starting webserver %s", err)
+			}
+		}
+	}()
+	<-ctx.Done()
+	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctxShutDown); !errors.Is(err, http.ErrServerClosed) && err != nil {
+		logrus.Error(err)
+	}
+
+	return nil
+}
 func (a *Admin) config() (*config.Config, error) {
 	conf, err := config.FromFile(a.configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			conf = &config.Config{
-				Masters: []string{"replace me"},
+				Masters: config.Masters{config.Master("replace me")},
 			}
 			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {
@@ -177,4 +248,73 @@ func (a *Admin) config() (*config.Config, error) {
 		}
 	}
 	return conf, nil
+}
+
+// openBrowser opens a link in the correct browser depending on OS.
+func openBrowser(link string) error {
+	var err error
+	switch runtime.GOOS {
+	case "linux":
+		err = Run("xdg-open", link)
+	case "darwin":
+		err = Run("open", link)
+	case "windows":
+		err = Run("rundll32", "url.dll,FileProtocolHandler", link)
+	default:
+		return errors.New("Unknown operating system, dont know how to open the link in the browser")
+	}
+	return err
+}
+
+// Run runs a command.
+func Run(head string, parts ...string) error {
+	var err error
+
+	cmd := exec.Command(head, parts...) // #nosec
+	cmd.Env = os.Environ()
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("run %s %s error: %w ", head, strings.Join(parts, " "), err)
+	}
+	return nil
+}
+
+func isErrorAddressAlreadyInUse(err error) bool {
+	errOpError, ok := err.(*net.OpError)
+	if !ok {
+		return false
+	}
+	errSyscallError, ok := errOpError.Err.(*os.SyscallError)
+	if !ok {
+		return false
+	}
+	errErrno, ok := errSyscallError.Err.(syscall.Errno)
+	if !ok {
+		return false
+	}
+	if errErrno == syscall.EADDRINUSE {
+		return true
+	}
+	const WSAEADDRINUSE = 10048
+	if runtime.GOOS == "windows" && errErrno == WSAEADDRINUSE {
+		return true
+	}
+	return false
+}
+
+func listenAndServe(srv *http.Server) error {
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	logrus.Infof("started proxy on http://%s", ln.Addr().String())
+	openBrowser("http://" + ln.Addr().String())
+	return srv.Serve(ln)
 }

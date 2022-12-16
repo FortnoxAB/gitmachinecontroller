@@ -3,6 +3,7 @@ package types
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 // ApiVersion is gitmachinecontroller.io/v1beta1.
@@ -16,8 +17,24 @@ type Machine struct {
 type Metadata struct {
 	// This is the hostname of the machine
 	Name        string            `json:"name"`
-	Labels      map[string]string `json:"labels"`
+	Labels      Labels            `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
+}
+
+type Labels map[string]string
+
+func (l Labels) Has(label string) (exists bool) {
+	if _, ok := l[label]; ok {
+		return true
+	}
+	return false
+}
+
+func (l Labels) Get(label string) (value string) {
+	if val, ok := l[label]; ok {
+		return val
+	}
+	return ""
 }
 
 type Spec struct {
@@ -84,4 +101,14 @@ type Provision struct {
 	Memory int `json:"memory"`
 	// TODO disks etc..
 	// Type   string `json:"type"` // dont need this unless we have multiple Provision providers. but we could use label selectors instead?
+}
+
+// MachineState is used internall in master to keep track of current state.
+type MachineState struct {
+	Metadata   *Metadata
+	IP         string
+	LastUpdate time.Time
+}
+type MachineStateQuestion struct {
+	ReplyCh chan map[string]*MachineState
 }

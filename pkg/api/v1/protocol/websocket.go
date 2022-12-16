@@ -75,13 +75,11 @@ func ParseMessage(msg []byte) (*WebsocketMessage, error) {
 type CommandResult struct {
 	Stdout string
 	Stderr string
+	Online bool
+	Code   int
 }
 
-func NewCommandResult(requestId, Stdout, Stderr string) (*WebsocketMessage, error) {
-	res := &CommandResult{
-		Stdout: Stdout,
-		Stderr: Stderr,
-	}
+func NewCommandResult(requestId string, res *CommandResult) (*WebsocketMessage, error) {
 	b, err := json.Marshal(res)
 	if err != nil {
 		return nil, err

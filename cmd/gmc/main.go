@@ -247,6 +247,23 @@ func app() *cli.App {
 			},
 		},
 		{
+			Name:  "proxy",
+			Usage: "proxies to master with admin JWT if it exists in config",
+			Action: func(c *cli.Context) error {
+				admin := admin.NewAdminFromContext(c)
+				return admin.Proxy(c.Context)
+			},
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					// this is the client for SREs so it needs to have a config somewhere.
+					Name:    "config",
+					Aliases: []string{"c"},
+					Value:   defaultConfigLocation(),
+					Usage:   "config file location. contains info about the master urls",
+				},
+			},
+		},
+		{
 			Name:  "completion",
 			Usage: "generate completion for shells",
 			Subcommands: []*cli.Command{

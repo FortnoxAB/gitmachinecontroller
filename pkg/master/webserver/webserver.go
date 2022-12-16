@@ -3,6 +3,7 @@ package webserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/fortnoxab/ginprometheus"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/jwt"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
@@ -19,10 +21,11 @@ import (
 )
 
 type Webserver struct {
-	Port      string
-	Masters   []string
-	Websocket *melody.Melody
-	jwt       *jwt.JWTHandler
+	Port           string
+	Masters        []string
+	Websocket      *melody.Melody
+	jwt            *jwt.JWTHandler
+	MachineStateCh chan types.MachineStateQuestion
 }
 
 func New(port, jwtKey string, masters []string) *Webserver {
@@ -48,11 +51,17 @@ func (ws *Webserver) Init() *gin.Engine {
 	}
 	router.Use(ginlogrus.New(logrus.StandardLogger(), logIgnorePaths...), gin.Recovery())
 
-	router.GET("/pending-machines", err(ws.listPendingMachines))
-	router.POST("/api/pending-machines/accept-v1", err(ws.approveMachine))
+	router.GET("/", func(c *gin.Context) {
+		fmt.Fprintf(c.Writer, `<a href="/machines">Machines</a>`)
+	})
 	router.GET("/api/up-v1", err(ws.listMasters))
-
 	router.POST("/api/admin-v1", err(ws.createAdmin))
+
+	requireAdmin := router.Group("/")
+	requireAdmin.Use(ws.jwt.Middleware())
+	requireAdmin.POST("/api/machines/accept-v1", err(ws.approveMachine))
+	requireAdmin.GET("/api/authed-v1", func(*gin.Context) {})
+	requireAdmin.GET("/machines", err(ws.listPendingMachines))
 
 	ws.initWS(router)
 
@@ -86,6 +95,7 @@ func (ws *Webserver) createAdmin(c *gin.Context) error {
 		return nil
 	}
 
+	// TODO add name of the admin person?
 	claims := jwt.DefaultClaims(jwt.OptionAdmin())
 	token, err := ws.jwt.GenerateJWT(claims)
 	if err != nil {
@@ -101,7 +111,6 @@ func (ws *Webserver) listMasters(c *gin.Context) error {
 }
 
 func (ws *Webserver) approveMachine(c *gin.Context) error {
-	// TODO check admin JWT here
 	type respStruct struct {
 		Host string
 	}
@@ -118,7 +127,12 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 	for _, sess := range sessions {
 		if host, ok := sess.Get("host"); ok && host.(string) == resp.Host {
 			logrus.Infof("approved %s", resp.Host)
-			token, err := ws.jwt.GenerateJWT(jwt.DefaultClaims(jwt.OptionHostname(resp.Host)))
+			ip, _ := sess.Get("ip")
+			token, err := ws.jwt.GenerateJWT(
+				jwt.DefaultClaims(
+					jwt.OptionHostname(resp.Host),
+					jwt.OptionAllowedIP(ip.(string)),
+				))
 			if err != nil {
 				logrus.Error(err)
 				continue
@@ -140,10 +154,8 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 	return nil
 }
 
-// TODO AUTH HÄR OXÅ! hur ska SRE autha sig? Bara med cli o hämta jtw över ssh kanske?
-// webserver kanska bara ska lyssna på localhost till en början så måste man ssh proxya?
+// TODO check admin JWT here with gmc proxy to master proxy.
 func (ws *Webserver) listPendingMachines(c *gin.Context) error {
-	// TODO check admin JWT here
 	t := `<!DOCTYPE html>
 <html lang="en">
 <body>
@@ -164,13 +176,24 @@ const acceptHost = (hostname) =>  {
 <table>
     <tr>
         <th>Name</th>
-        <th>Accept</th>
+        <th>IP</th>
+        <th>Online</th>
+        <th>Git</th>
+        <th>LastGitUpdate</th>
+        <th></th>
     </tr>
     {{ range .}}
         <tr>
             <td>{{ .Name }}</td>
             <td>{{ .IP }}</td>
-            <td><button onclick="acceptHost('{{.Name}}')">Accept</button></td>
+            <td {{if .Online }}style="color:green;"{{else}}style="color:red;"{{end}}>
+			{{ .Online }}
+			</td>
+            <td {{if .Git }}style="color:green;"{{else}}style="color:red;"{{end}}>
+			{{ .Git }}
+			</td>
+            <td>{{ .LastUpdate.Format "2006-01-02T15:04:05Z07:00" }}</td>
+            <td>{{if and (not .Accepted) .Online }}<button onclick="acceptHost('{{.Name}}')">Accept</button>{{end}}</td>
         </tr>
     {{ end}}
 </table>
@@ -183,25 +206,49 @@ const acceptHost = (hostname) =>  {
 	}
 
 	type host struct {
-		Name string `json:"name"`
-		IP   string `json:"ip"`
+		Name       string `json:"name"`
+		IP         string `json:"ip"`
+		Online     bool
+		Accepted   bool
+		Git        bool
+		LastUpdate time.Time
 	}
-	hostList := []*host{}
+	hostList := make(map[string]*host)
 	sessions, err := ws.Websocket.Sessions()
+	ch := make(chan map[string]*types.MachineState)
+	ws.MachineStateCh <- types.MachineStateQuestion{ReplyCh: ch}
+	list := <-ch
+	fmt.Println(list)
+	for _, h := range list {
+		hostList[h.Metadata.Name] = &host{
+			Name:       h.Metadata.Name,
+			IP:         h.IP,
+			LastUpdate: h.LastUpdate,
+			Git:        true,
+		}
+	}
+
 	for _, s := range sessions {
-		if a, exists := s.Get("allowed"); exists {
-			if a, ok := a.(bool); ok && !a {
-				name, ok := s.Get("host")
-				if !ok {
-					logrus.Error("missing host key in websocket session")
-					continue
-				}
-				machine := &host{Name: name.(string)}
-				if ip, ok := s.Get("ip"); ok {
-					machine.IP = ip.(string)
-				}
-				hostList = append(hostList, machine)
+		name, ok := s.Get("host")
+		if !ok {
+			logrus.Error("missing host key in websocket session")
+			continue
+		}
+		if _, ok := hostList[name.(string)]; !ok {
+			hostList[name.(string)] = &host{
+				Name: name.(string),
 			}
+		}
+
+		hostList[name.(string)].Online = true
+		if ip, ok := s.Get("ip"); ok {
+			hostList[name.(string)].IP = ip.(string)
+		}
+
+		allowed, _ := s.Get("allowed")
+		if allowed.(bool) {
+			hostList[name.(string)].Accepted = allowed.(bool)
+			hostList[name.(string)].Online = true
 		}
 	}
 
@@ -212,7 +259,9 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 	router.GET("/api/websocket-v1", func(c *gin.Context) {
 		keys := make(map[string]interface{})
 		keys["allowed"] = false
+		keys["admin"] = false
 		keys["ip"] = c.ClientIP()
+		keys["allowedIP"] = ""
 
 		tokenString := c.Request.Header.Get("Authorization")
 		if tokenString == "" {
@@ -223,17 +272,20 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 			}
 			keys["host"] = hostname
 		} else {
-			// TODO validate src IP compared to the git manifest here?
 			claims, err := ws.jwt.ValidateToken(tokenString)
 			if err != nil {
 				c.AbortWithError(http.StatusUnauthorized, err)
 				return
 			}
+			if keys["ip"] != claims.AllowedIP && !claims.Admin { // Only allow agent to connect from the IP in their JWT
+				c.AbortWithError(http.StatusUnauthorized, fmt.Errorf("connection from %s forbidden, allowed: %s", keys["ip"], claims.AllowedIP))
+				return
+			}
+			keys["admin"] = claims.Admin
 			keys["host"] = claims.Host
 			keys["allowed"] = claims.Allowed
 		}
 
-		// TODO make sure we only have one connection from each host.
 		ws.Websocket.HandleRequestWithKeys(c.Writer, c.Request, keys)
 	})
 }
