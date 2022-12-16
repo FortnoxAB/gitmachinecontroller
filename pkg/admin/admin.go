@@ -174,6 +174,14 @@ func (a *Admin) Bootstrap(ctx context.Context) error {
 		return err
 	}
 
+	// find where own binary is located
+	// SCP binary to target
+	// ssh to target and start binary with --one-shot
+	// (do we need to wait that it shows up in pending list?)
+	// call /api/machines/accept-v1 with {"host":hostname} body
+
+	// it will configure it-self from git and then die and start itself with systemd.
+
 	fmt.Println(conf)
 	return nil
 }
