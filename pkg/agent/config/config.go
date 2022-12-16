@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/fortnoxab/gitmachinecontroller/pkg/websocket"
@@ -21,7 +22,30 @@ type Config struct {
 
 type Masters []Master
 
-func (m *Config) FindMasterForConnection(ctx context.Context) string {
+func (m Masters) string() []string {
+	ret := make([]string, len(m))
+	for i, a := range m {
+		ret[i] = string(a)
+	}
+	return ret
+}
+
+func (m Masters) Equal(with Masters) bool {
+	s1 := with.string()
+	s2 := with.string()
+	sort.Strings(s1)
+	sort.Strings(s2)
+	for _, m1 := range s1 {
+		for _, m2 := range s2 {
+			if m1 != m2 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (m *Config) FindMasterForConnection(ctx context.Context, configFile string) string {
 	for {
 		for _, master := range m.Masters {
 			masters, err := master.isAlive()
@@ -29,12 +53,17 @@ func (m *Config) FindMasterForConnection(ctx context.Context) string {
 				logrus.Error("master not alive:", err)
 				continue
 			}
-			// TODO set new master list here.
-			m.Masters = masters
+			if !masters.Equal(m.Masters) {
+				m.Masters = masters
+				if configFile != "" {
+					err := ToFile(configFile, m)
+					if err != nil {
+						logrus.Errorf("error saving configFile: %s", err)
+						// TODO return error instead?
+					}
+				}
+			}
 			return string(master)
-		}
-		if ctx.Err() != nil {
-			return ""
 		}
 
 		logrus.Error("found no working master will sleep 10 seconds and try again")

@@ -150,7 +150,6 @@ func (m *Master) run(ctx context.Context) error {
 	websocketCh := make(chan *websocketRequest)
 	go m.stateRunner(ctx, syncCh, websocketCh)
 	go func() {
-		/* TODO */
 		for {
 			select {
 			case manifest := <-manifestCh:
@@ -318,6 +317,14 @@ func (m *Master) filterSessions(machines map[string]*types.MachineState, rex, se
 
 func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.MachineState, sess *melody.Session, r *websocketRequest) error {
 	switch r.Request.Type {
+	case "renew-agent-jwt":
+		a, _ := sess.Get("allowed")
+		host, _ := sess.Get("host")
+		if !a.(bool) {
+			return fmt.Errorf("renew not allowed for %s", host.(string))
+		}
+		return m.webserver.ApproveAgent(host.(string))
+
 	case "run-command-request":
 		cmdReq := &protocol.RunCommandRequest{}
 		err := json.Unmarshal(r.Request.Body, cmdReq)

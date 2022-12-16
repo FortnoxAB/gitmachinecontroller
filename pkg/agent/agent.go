@@ -95,7 +95,7 @@ func (a *Agent) run(pCtx context.Context) error {
 	go func() {
 		defer a.wg.Done()
 		for {
-			master := a.config.FindMasterForConnection(pCtx)
+			master := a.config.FindMasterForConnection(pCtx, a.configFile)
 
 			if pCtx.Err() != nil {
 				return
@@ -126,6 +126,30 @@ func (a *Agent) run(pCtx context.Context) error {
 				logrus.Errorf("websocket: disconnected: %s", err)
 				cancel()
 				// connect again!
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(time.Hour * 12)
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		for {
+			select {
+			case <-ticker.C:
+				msg, err := protocol.NewMessage("renew-agent-jwt", nil)
+				if err != nil {
+					logrus.Error(err)
+					continue
+				}
+				err = a.WriteMessage(msg)
+				if err != nil {
+					logrus.Error(err)
+				}
+
+			case <-pCtx.Done():
+				logrus.Debug("stopping jwt refresh loop")
+				return
 			}
 		}
 	}()

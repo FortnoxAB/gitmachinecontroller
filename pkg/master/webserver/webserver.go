@@ -120,41 +120,9 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 		return err
 	}
 
-	sessions, err := ws.Websocket.Sessions()
-	if err != nil {
-		return err
-	}
-	for _, sess := range sessions {
-		if host, ok := sess.Get("host"); ok && host.(string) == resp.Host {
-			logrus.Infof("approved %s", resp.Host)
-			ip, _ := sess.Get("ip")
-			token, err := ws.jwt.GenerateJWT(
-				jwt.DefaultClaims(
-					jwt.OptionHostname(resp.Host),
-					jwt.OptionAllowedIP(ip.(string)),
-				))
-			if err != nil {
-				logrus.Error(err)
-				continue
-			}
-			msg, err := protocol.NewMachineAccepted(resp.Host, token)
-			if err != nil {
-				logrus.Error(err)
-				continue
-			}
-			err = sess.Write(msg)
-			if err != nil {
-				logrus.Error(err)
-				continue
-			}
-			break
-		}
-	}
-
-	return nil
+	return ws.ApproveAgent(resp.Host)
 }
 
-// TODO check admin JWT here with gmc proxy to master proxy.
 func (ws *Webserver) listPendingMachines(c *gin.Context) error {
 	t := `<!DOCTYPE html>
 <html lang="en">
@@ -318,6 +286,36 @@ func (ws *Webserver) Start(ctx context.Context) {
 	if err := srv.Shutdown(ctxShutDown); !errors.Is(err, http.ErrServerClosed) && err != nil {
 		logrus.Error(err)
 	}
+}
+func (ws *Webserver) ApproveAgent(hostname string) error {
+	sessions, err := ws.Websocket.Sessions()
+	if err != nil {
+		return err
+	}
+	for _, sess := range sessions {
+		if host, ok := sess.Get("host"); ok && host.(string) == hostname {
+			logrus.Infof("approved agent %s", hostname)
+			ip, _ := sess.Get("ip")
+			token, err := ws.jwt.GenerateJWT(
+				jwt.DefaultClaims(
+					jwt.OptionHostname(hostname),
+					jwt.OptionAllowedIP(ip.(string)),
+				))
+			if err != nil {
+				return err
+			}
+			msg, err := protocol.NewMachineAccepted(hostname, token)
+			if err != nil {
+				return err
+			}
+			err = sess.Write(msg)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
 }
 
 func err(f func(c *gin.Context) error) gin.HandlerFunc {

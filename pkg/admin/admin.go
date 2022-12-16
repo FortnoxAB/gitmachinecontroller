@@ -63,7 +63,7 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 
 	wsClient := websocket.NewWebsocketClient()
 
-	master := conf.FindMasterForConnection(ctx)
+	master := conf.FindMasterForConnection(ctx, "")
 
 	u, err := websocket.ToWS(master)
 	if err != nil {
@@ -191,7 +191,7 @@ func (a *Admin) Proxy(ctx context.Context) error {
 		return err
 	}
 
-	target, err := url.Parse(conf.FindMasterForConnection(ctx))
+	target, err := url.Parse(conf.FindMasterForConnection(ctx, ""))
 	target.RawQuery = ""
 	target.Path = ""
 
@@ -314,15 +314,11 @@ func isErrorAddressAlreadyInUse(err error) bool {
 }
 
 func listenAndServe(srv *http.Server) error {
-	addr := srv.Addr
-	if addr == "" {
-		addr = ":http"
-	}
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
 		return err
 	}
 	logrus.Infof("started proxy on http://%s", ln.Addr().String())
-	openBrowser("http://" + ln.Addr().String())
+	openBrowser("http://" + ln.Addr().String() + "/machines")
 	return srv.Serve(ln)
 }
