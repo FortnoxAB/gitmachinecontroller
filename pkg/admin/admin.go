@@ -22,11 +22,13 @@ import (
 	"github.com/fatih/color"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/build"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/websocket"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
+	"gopkg.in/yaml.v3"
 )
 
 // handles exec and apply commands.
@@ -52,11 +54,7 @@ func NewAdminFromContext(c *cli.Context) *Admin {
 	}
 }
 
-func (a *Admin) Exec(ctx context.Context, command string) error {
-	conf, err := a.config()
-	if err != nil {
-		return err
-	}
+func (a *Admin) wsConnect(ctx context.Context, conf *config.Config) (websocket.Websocket, error) {
 	headers := http.Header{}
 	headers.Add("X-VERSION", build.JSON())
 	headers.Set("Authorization", conf.Token)
@@ -67,13 +65,23 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 
 	u, err := websocket.ToWS(master)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = wsClient.ConnectContext(ctx, u, headers)
 	if err != nil {
+		return nil, err
+	}
+
+	return wsClient, nil
+}
+
+func (a *Admin) Exec(ctx context.Context, command string) error {
+	conf, err := a.config()
+	if err != nil {
 		return err
 	}
+	wsClient, err := a.wsConnect(ctx, conf)
 
 	cmdReq := protocol.RunCommandRequest{
 		Command:       command,
@@ -158,13 +166,128 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 	return nil
 }
 
-func (a *Admin) Apply(ctx context.Context) error {
+func (a *Admin) Apply(ctx context.Context, args []string) error {
 	conf, err := a.config()
 	if err != nil {
 		return err
 	}
+	wsClient, err := a.wsConnect(ctx, conf)
 
-	fmt.Println(conf)
+	reqid := uuid.New().String()
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		expectedReadCount := 0
+		readCount := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case data := <-wsClient.Read():
+				msg, err := protocol.ParseMessage(data)
+				if err != nil {
+					logrus.Error("websocket reader:", err)
+					continue
+				}
+				if msg.RequestID != reqid {
+					continue
+				}
+				if msg.Type == "expected-result-count" {
+					var cnt int
+					err := json.Unmarshal(msg.Body, &cnt)
+					if err != nil {
+						logrus.Error(err)
+						return
+					}
+					if cnt == 0 {
+						logrus.Error("found no machines online on master")
+						return
+					}
+					expectedReadCount = cnt
+					continue
+				}
+
+				if msg.Type != "admin-apply-spec-result" {
+					logrus.Warnf("got unexpected message of type: %s", msg.Type)
+					continue
+				}
+				readCount++
+
+				fmt.Println(msg)
+				// cmdRes := &protocol.CommandResult{}
+				// err = json.Unmarshal(msg.Body, cmdRes)
+				// if err != nil {
+				// 	logrus.Error("error reading command result:", err)
+				// 	continue
+				// }
+				// if cmdRes.Online {
+				// 	green := color.New(color.FgGreen).SprintFunc()
+				// 	fmt.Printf("%s:\n%s\n\n", green(msg.From), cmdRes.Stdout)
+				// } else {
+				// 	red := color.New(color.FgRed).SprintFunc()
+				// 	fmt.Printf("%s (offline):\n%s\n\n", red(msg.From), cmdRes.Stdout)
+				// }
+
+				if readCount >= expectedReadCount {
+					return
+				}
+			}
+		}
+	}()
+
+	sendManifest := func(path string) error {
+		machine := &types.Machine{}
+		// path := filepath.Join(arg, f.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("error opening: %s err: %s", path, err)
+		}
+
+		err = yaml.Unmarshal(b, machine)
+		if err != nil {
+			return fmt.Errorf("error yaml parse: %s err: %s", path, err)
+		}
+		msg, err := protocol.NewMessage("admin-apply-spec", machine)
+		if err != nil {
+			return err
+		}
+
+		msg.RequestID = reqid
+		msg.Source = "cli"
+
+		return wsClient.WriteJSON(msg)
+	}
+
+	for _, arg := range args {
+		if file, err := os.Stat(arg); err == nil && !file.IsDir() {
+			fmt.Println("apply file: ", arg)
+			err = sendManifest(arg)
+			if err != nil {
+				logrus.Error(err)
+			}
+			continue
+		}
+
+		paths, err := os.ReadDir(arg)
+		if err != nil {
+			return err
+		}
+		for _, f := range paths {
+			if f.IsDir() {
+				continue
+			}
+			path := filepath.Join(arg, f.Name())
+			fmt.Println("apply file: ", path)
+			err := sendManifest(path)
+			if err != nil {
+				logrus.Error(err)
+			}
+			continue
+		}
+	}
+	wg.Wait()
 	return nil
 }
 

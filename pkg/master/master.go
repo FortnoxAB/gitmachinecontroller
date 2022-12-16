@@ -188,11 +188,7 @@ func (m *Master) run(ctx context.Context) error {
 			logrus.Error(err)
 			return
 		}
-		host, ok := sess.Get("host")
-		if !ok {
-			logrus.Error("did not find host field in the ws session")
-			return
-		}
+		host, _ := sess.Get("host")
 		pkt.From = host.(string)
 		websocketCh <- &websocketRequest{
 			Request: pkt,
@@ -320,12 +316,15 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 	case "renew-agent-jwt":
 		a, _ := sess.Get("allowed")
 		host, _ := sess.Get("host")
-		if !a.(bool) {
+		if !a.(bool) || host.(string) == "" {
 			return fmt.Errorf("renew not allowed for %s", host.(string))
 		}
 		return m.webserver.ApproveAgent(host.(string))
 
 	case "run-command-request":
+		if admin, _ := sess.Get("admin"); !admin.(bool) {
+			return fmt.Errorf("run-command-request permission denied")
+		}
 		cmdReq := &protocol.RunCommandRequest{}
 		err := json.Unmarshal(r.Request.Body, cmdReq)
 		if err != nil {
@@ -453,6 +452,9 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 	logrus.Debugf("cloned %s from %s", commit, m.GitURL)
 
 	files, err := os.ReadDir(filepath.Join(dir, m.GitPath))
+	if err != nil {
+		return err
+	}
 
 	for _, file := range files {
 		machine := &types.Machine{}
