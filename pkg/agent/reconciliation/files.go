@@ -77,7 +77,7 @@ func writeContentIfNeeded(file *types.File) (bool, error) {
 	}
 
 	// existing file we make a tempfile in the same target directory and then atomic move.
-	tempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gcm")
+	tempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gmc")
 	if err != nil {
 		return false, err
 	}
@@ -162,7 +162,7 @@ func fetchFromURL(file *types.File) (bool, error) {
 
 	defer resp.Body.Close()
 
-	tempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gcm")
+	tempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gmc")
 	if err != nil {
 		return false, err
 	}
@@ -177,7 +177,7 @@ func fetchFromURL(file *types.File) (bool, error) {
 
 	if file.ExtractFile != "" {
 		tempFile.Seek(0, io.SeekStart)
-		newTempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gcm")
+		newTempFile, err := os.CreateTemp(filepath.Dir(file.Path), "gmc")
 		if err != nil {
 			return false, err
 		}

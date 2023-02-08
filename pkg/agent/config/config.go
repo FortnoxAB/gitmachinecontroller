@@ -13,11 +13,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// TODO use this config to persist token on disk
-// make sure its permission is 600.
 type Config struct {
 	Masters Masters `json:"masters"`
 	Token   string  `json:"token"`
+	Ignore  bool    `json:"ignore"`
 }
 
 type Masters []Master
@@ -86,6 +85,10 @@ func (m Master) isAlive() (Masters, error) {
 	defer cancel()
 
 	u, err := websocket.ToHTTP(string(m))
+	if err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err

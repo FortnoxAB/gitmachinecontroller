@@ -172,6 +172,9 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 		return err
 	}
 	wsClient, err := a.wsConnect(ctx, conf)
+	if err != nil {
+		return err
+	}
 
 	reqid := uuid.New().String()
 
@@ -255,7 +258,7 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 		}
 
 		msg.RequestID = reqid
-		msg.Source = "cli"
+		msg.Source = protocol.ManualSource
 
 		return wsClient.WriteJSON(msg)
 	}

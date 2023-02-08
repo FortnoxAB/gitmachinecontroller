@@ -16,9 +16,25 @@ type Machine struct {
 
 type Metadata struct {
 	// This is the hostname of the machine
-	Name        string            `json:"name"`
-	Labels      Labels            `json:"labels"`
-	Annotations map[string]string `json:"annotations"`
+	Name        string      `json:"name"`
+	Labels      Labels      `json:"labels"`
+	Annotations Annotations `json:"annotations"`
+}
+
+type Annotations map[string]string
+
+func (l Annotations) Has(label string) (exists bool) {
+	if _, ok := l[label]; ok {
+		return true
+	}
+	return false
+}
+
+func (l Annotations) Get(label string) (value string) {
+	if val, ok := l[label]; ok {
+		return val
+	}
+	return ""
 }
 
 type Labels map[string]string

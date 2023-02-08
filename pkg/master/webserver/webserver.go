@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/fortnoxab/ginprometheus"
@@ -277,9 +278,10 @@ func (ws *Webserver) Start(ctx context.Context) {
 
 	<-ctx.Done()
 
-	// TODO enable if in k8s
-	// logrus.Debug("sleeping 5 sec before shutdown") // to give k8s ingresses time to sync
-	// time.Sleep(5 * time.Second)
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "" {
+		logrus.Debug("sleeping 5 sec before shutdown") // to give k8s ingresses time to sync
+		time.Sleep(5 * time.Second)
+	}
 	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

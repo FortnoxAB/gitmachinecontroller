@@ -188,7 +188,7 @@ func app() *cli.App {
 		},
 		{
 			Name:  "apply",
-			Usage: `applies a directory of manifests to hosts. Useful for local development. Will be overridden by git source if not annotated with gcm.io/ignore="true"`,
+			Usage: `applies a directory of manifests to hosts. Useful for local development. Will be overridden by git source if not annotated with gmc.io/ignore="true"`,
 			Action: func(c *cli.Context) error {
 				admin := admin.NewAdminFromContext(c)
 				return admin.Apply(c.Context, c.Args().Slice())

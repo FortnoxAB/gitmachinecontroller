@@ -87,10 +87,6 @@ func (a *Agent) run(pCtx context.Context) error {
 		hostname = a.FakeHostname
 	}
 
-	headers := http.Header{}
-	headers.Add("X-HOSTNAME", hostname)
-	headers.Add("X-VERSION", build.JSON())
-
 	a.wg.Add(2)
 	go func() {
 		defer a.wg.Done()
@@ -102,9 +98,10 @@ func (a *Agent) run(pCtx context.Context) error {
 			}
 			ctx, cancel := context.WithCancel(pCtx)
 
-			a.mutex.RLock()
+			headers := http.Header{}
+			headers.Add("X-HOSTNAME", hostname)
+			headers.Add("X-VERSION", build.JSON())
 			headers.Set("Authorization", a.config.Token)
-			a.mutex.RUnlock()
 			u, err := websocket.ToWS(master)
 			if err != nil {
 				logrus.Error(err)
@@ -209,16 +206,36 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 }
 
 func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
-	// TODO if msg.Source is protocol.ManualSource and manifest has annotation gcm.io/ignore = "true"
+	// TODO if msg.Source is protocol.ManualSource and manifest has annotation gmc.io/ignore = "true"
 	// then save local state and config on disk that we ignore git updates until the annotation is removed.
-	recon := &reconciliation.MachineReconciler{}
+
+	if msg.Source == protocol.GitSource && a.config.Ignore {
+		logrus.Debug("ignore reconciliation since we have gmc.io/ignore=true")
+		return nil
+	}
 
 	machine := &types.Machine{}
 	err := json.Unmarshal(msg.Body, machine)
 	if err != nil {
 		return err
 	}
+	if machine.Metadata != nil &&
+		machine.Metadata.Annotations != nil &&
+		machine.Metadata.Annotations.Get("gmc.io/ignore") == "true" {
 
+		a.config.Ignore = true
+		return config.ToFile(a.configFile, a.config)
+	}
+
+	if msg.Source == protocol.ManualSource && a.config.Ignore {
+		a.config.Ignore = false
+		err := config.ToFile(a.configFile, a.config)
+		if err != nil {
+			return err
+		}
+	}
+
+	recon := &reconciliation.MachineReconciler{}
 	return recon.Reconcile(machine)
 	// return nil
 }

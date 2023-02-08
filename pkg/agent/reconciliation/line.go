@@ -46,7 +46,7 @@ func applyLine(line *types.Line) error {
 	mode := stat.Mode().Perm()
 	orgFile.Close()
 
-	tempFile, err := os.CreateTemp(filepath.Dir(line.Path), "gcm")
+	tempFile, err := os.CreateTemp(filepath.Dir(line.Path), "gmc")
 	if err != nil {
 		return err
 	}
