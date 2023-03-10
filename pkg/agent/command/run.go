@@ -9,9 +9,13 @@ import (
 )
 
 func Run(command string) (string, string, error) {
+	stdout, stderr, _, err := RunWithCode(command)
+	return stdout, stderr, err
+}
+func RunWithCode(command string) (string, string, int, error) {
 	args, err := shlex.Split(command)
 	if err != nil {
-		return "", "", err
+		return "", "", -1, err
 	}
 	cmd := exec.Command(args[0], args[1:]...) // #nosec
 	outBuf := &strings.Builder{}
@@ -19,11 +23,11 @@ func Run(command string) (string, string, error) {
 	cmd.Stdout = outBuf
 	cmd.Stderr = errBuf
 	err = cmd.Run()
+	code := cmd.ProcessState.ExitCode()
 	if err != nil {
-		return strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()),
-			fmt.Errorf("error running: %s error: %w stderr: %s stdout: %s", command, err, strings.TrimSpace(errBuf.String()), strings.TrimSpace(outBuf.String()))
+		return strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()), code, err
 	}
-	return strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()), err
+	return strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()), code, nil
 }
 
 func RunExpectCodes(command string, codes ...int) (string, int, error) {

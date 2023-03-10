@@ -138,7 +138,7 @@ const acceptHost = (hostname) =>  {
         },
 		body: JSON.stringify({host: hostname})      
     }
-    fetch("/api/pending-machines/accept-v1", options);
+    fetch("/api/machines/accept-v1", options);
 	location.reload();
 }
 </script>
@@ -187,7 +187,6 @@ const acceptHost = (hostname) =>  {
 	ch := make(chan map[string]*types.MachineState)
 	ws.MachineStateCh <- types.MachineStateQuestion{ReplyCh: ch}
 	list := <-ch
-	fmt.Println(list)
 	for _, h := range list {
 		hostList[h.Metadata.Name] = &host{
 			Name:       h.Metadata.Name,

@@ -82,6 +82,9 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 		return err
 	}
 	wsClient, err := a.wsConnect(ctx, conf)
+	if err != nil {
+		return err
+	}
 
 	cmdReq := protocol.RunCommandRequest{
 		Command:       command,
@@ -101,8 +104,6 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		expectedReadCount := 0
-		readCount := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -116,26 +117,14 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 				if msg.RequestID != reqid {
 					continue
 				}
-				if msg.Type == "expected-result-count" {
-					var cnt int
-					err := json.Unmarshal(msg.Body, &cnt)
-					if err != nil {
-						logrus.Error(err)
-						return
-					}
-					if cnt == 0 {
-						logrus.Error("found no machines online on master")
-						return
-					}
-					expectedReadCount = cnt
-					continue
+				if msg.Type == "command-result-finished" {
+					return
 				}
 
 				if msg.Type != "command-result" {
 					logrus.Warnf("got unexpected message of type: %s", msg.Type)
 					continue
 				}
-				readCount++
 
 				cmdRes := &protocol.CommandResult{}
 				err = json.Unmarshal(msg.Body, cmdRes)
@@ -151,9 +140,6 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 					fmt.Printf("%s (offline):\n%s\n\n", red(msg.From), cmdRes.Stdout)
 				}
 
-				if readCount >= expectedReadCount {
-					return
-				}
 			}
 		}
 	}()
@@ -182,8 +168,6 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		expectedReadCount := 0
-		readCount := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -197,26 +181,14 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 				if msg.RequestID != reqid {
 					continue
 				}
-				if msg.Type == "expected-result-count" {
-					var cnt int
-					err := json.Unmarshal(msg.Body, &cnt)
-					if err != nil {
-						logrus.Error(err)
-						return
-					}
-					if cnt == 0 {
-						logrus.Error("found no machines online on master")
-						return
-					}
-					expectedReadCount = cnt
-					continue
+				if msg.Type == "command-result-finished" {
+					return
 				}
 
 				if msg.Type != "admin-apply-spec-result" {
 					logrus.Warnf("got unexpected message of type: %s", msg.Type)
 					continue
 				}
-				readCount++
 
 				fmt.Println(msg)
 				// cmdRes := &protocol.CommandResult{}
@@ -233,9 +205,6 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 				// 	fmt.Printf("%s (offline):\n%s\n\n", red(msg.From), cmdRes.Stdout)
 				// }
 
-				if readCount >= expectedReadCount {
-					return
-				}
 			}
 		}
 	}()

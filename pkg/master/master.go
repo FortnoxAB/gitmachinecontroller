@@ -350,12 +350,11 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		}
 
 		onlineLen := len(sendTo)
-		max := onlineLen + len(offline)
-		logrus.Debugf("will send command request to cnt: %d", max)
+		logrus.Debugf("will send command request to cnt: %d", onlineLen)
 		logrus.Debugf("offline machines: %#v", offline)
-		sendExpectedReadCount(sess, r.Request.RequestID, max)
 
-		if max == 0 {
+		if len(sendTo)+len(offline) == 0 {
+			sendCommandResultFinished(sess, r.Request.RequestID)
 			return fmt.Errorf("found zero hosts to send command to")
 		}
 
@@ -380,13 +379,8 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 
 		go func() {
 			defer requestResponseStore.Done(r.Request.RequestID)
-			i := -1
-			for {
-				i++
-				if i >= onlineLen {
-					logrus.Debug("got all the responses")
-					return
-				}
+			defer sendCommandResultFinished(sess, r.Request.RequestID)
+			for range sendTo {
 				select {
 				case resp := <-requestResponseStore.WaitForResponse(r.Request.RequestID):
 					d, err := json.Marshal(resp.Request)
@@ -422,14 +416,17 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 	return nil
 }
 
-func sendExpectedReadCount(sess *melody.Session, reqID string, cnt int) error {
-	resultCoutnMsg, err := protocol.NewMessage("expected-result-count", cnt)
+func sendCommandResultFinished(sess *melody.Session, reqID string) error {
+	msg := &protocol.WebsocketMessage{
+		Type:      "command-result-finished",
+		RequestID: reqID,
+	}
+	b, err := msg.Encode()
 	if err != nil {
 		return err
 	}
-	resultCoutnMsg.RequestID = reqID
-	resCnt, err := resultCoutnMsg.Encode()
-	return sess.Write(resCnt)
+
+	return sess.Write(b)
 }
 
 func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan *types.Machine) error {

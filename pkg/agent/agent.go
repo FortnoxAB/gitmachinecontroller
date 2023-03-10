@@ -184,14 +184,17 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 		return err
 	}
 
-	stdout, stderr, err := command.Run(cmd)
-
-	resp, err := protocol.NewCommandResult(msg.RequestID, &protocol.CommandResult{
+	stdout, stderr, code, err := command.RunWithCode(cmd)
+	cr := &protocol.CommandResult{
 		Stdout: stdout,
 		Stderr: stderr,
 		Online: true,
-		// TODO Code: code,
-	})
+		Code:   code,
+	}
+	if err != nil {
+		cr.Err = err.Error()
+	}
+	resp, err := protocol.NewCommandResult(msg.RequestID, cr)
 	if err != nil {
 		return err
 	}

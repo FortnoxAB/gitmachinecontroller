@@ -75,6 +75,7 @@ func ParseMessage(msg []byte) (*WebsocketMessage, error) {
 type CommandResult struct {
 	Stdout string
 	Stderr string
+	Err    string
 	Online bool
 	Code   int
 }
