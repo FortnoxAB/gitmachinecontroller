@@ -90,8 +90,10 @@ func (ws *Webserver) createAdmin(c *gin.Context) error {
 		}
 		isAdmin = claims.Admin
 	}
+
+	isProxy := c.Request.Header.Get("x-forwarded-for") != ""
 	ip := net.ParseIP(ipStr)
-	if !ip.IsLoopback() && !isAdmin {
+	if (!ip.IsLoopback() && !isAdmin) || isProxy {
 		c.AbortWithError(http.StatusUnauthorized, err)
 		return nil
 	}

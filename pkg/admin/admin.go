@@ -117,7 +117,7 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 				if msg.RequestID != reqid {
 					continue
 				}
-				if msg.Type == "command-result-finished" {
+				if msg.Type == "last_message" {
 					return
 				}
 
@@ -153,6 +153,10 @@ func (a *Admin) Exec(ctx context.Context, command string) error {
 }
 
 func (a *Admin) Apply(ctx context.Context, args []string) error {
+
+	if len(args) == 0 {
+		return fmt.Errorf("zero arguments to apply")
+	}
 	conf, err := a.config()
 	if err != nil {
 		return err
@@ -181,7 +185,8 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 				if msg.RequestID != reqid {
 					continue
 				}
-				if msg.Type == "command-result-finished" {
+				//TODO listen for as many last_message as we sent admin-apply-spec
+				if msg.Type == "last_message" {
 					return
 				}
 
@@ -227,7 +232,7 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 		}
 
 		msg.RequestID = reqid
-		msg.Source = protocol.ManualSource
+		msg.Source = "cli"
 
 		return wsClient.WriteJSON(msg)
 	}

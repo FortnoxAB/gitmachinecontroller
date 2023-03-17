@@ -112,6 +112,8 @@ func (a *Agent) run(pCtx context.Context) error {
 			err = a.client.ConnectContext(ctx, u, headers)
 			if err != nil {
 				logrus.Error(err)
+				cancel()
+				continue
 			}
 
 			select {

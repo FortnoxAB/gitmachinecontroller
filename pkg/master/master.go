@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -123,6 +122,11 @@ type websocketRequest struct {
 	Sess    *melody.Session
 }
 
+type machineUpdate struct {
+	Source  protocol.Source
+	Machine *types.Machine
+}
+
 func (m *Master) run(ctx context.Context) error {
 	u, err := url.Parse(m.GitURL)
 	if err != nil {
@@ -145,28 +149,28 @@ func (m *Master) run(ctx context.Context) error {
 
 	ticker := time.NewTicker(m.GitPollInterval)
 
-	manifestCh := make(chan *types.Machine)
+	machineUpdateCh := make(chan machineUpdate)
 	syncCh := make(chan *types.Machine)
 	websocketCh := make(chan *websocketRequest)
-	go m.stateRunner(ctx, syncCh, websocketCh)
+	go m.stateRunner(ctx, syncCh, websocketCh, machineUpdateCh)
 	go func() {
 		for {
 			select {
-			case manifest := <-manifestCh:
-				syncCh <- manifest
+			case update := <-machineUpdateCh:
+				syncCh <- update.Machine
 				// TODO template most string values to support secrets?
-				msg, err := protocol.NewMachineUpdate(protocol.GitSource, manifest)
+				msg, err := protocol.NewMachineUpdate(update.Source, update.Machine)
 				if err != nil {
 					logrus.Error(err)
 					continue
 				}
 				err = m.webserver.Websocket.BroadcastFilter(msg, func(s *melody.Session) bool {
 					host, exists := s.Get("host")
-					if exists && host.(string) != manifest.Metadata.Name {
+					if exists && host.(string) != update.Machine.Metadata.Name {
 						return false
 					}
 					if a, exists := s.Get("allowed"); exists && a.(bool) {
-						logrus.Debugf("sending machine config to host %s", host.(string))
+						logrus.Debugf("sending machine config to host %s from %s", host.(string), update.Source)
 						return true
 					}
 					return false
@@ -196,7 +200,7 @@ func (m *Master) run(ctx context.Context) error {
 		}
 	})
 
-	err = m.clone(ctx, authOpts, cloneOpts, manifestCh)
+	err = m.clone(ctx, authOpts, cloneOpts, machineUpdateCh)
 	if err != nil {
 		logrus.Error(err)
 	}
@@ -204,7 +208,7 @@ func (m *Master) run(ctx context.Context) error {
 	for {
 		select {
 		case <-ticker.C:
-			err = m.clone(ctx, authOpts, cloneOpts, manifestCh)
+			err = m.clone(ctx, authOpts, cloneOpts, machineUpdateCh)
 			if err != nil {
 				// TODO error metrics for alarms?
 				logrus.Error(err)
@@ -225,13 +229,13 @@ func (m *Master) run(ctx context.Context) error {
 	// }
 }
 
-func (m *Master) stateRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest) {
+func (m *Master) stateRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest, machineUpd chan machineUpdate) {
 	//TODO add timestamp and IP and make it accessable from /pending-machines to print all machines?
 	machines := make(map[string]*types.MachineState)
 	for {
 		select {
 		case request := <-websocketCh:
-			err := m.handleRequest(ctx, machines, request.Sess, request)
+			err := m.handleRequest(ctx, machines, request, machineUpd)
 			if err != nil {
 				logrus.Error(err)
 			}
@@ -311,7 +315,8 @@ func (m *Master) filterSessions(machines map[string]*types.MachineState, rex, se
 	return sendTo, offline, nil
 }
 
-func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.MachineState, sess *melody.Session, r *websocketRequest) error {
+func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.MachineState, r *websocketRequest, machineUpdateCh chan machineUpdate) error {
+	sess := r.Sess
 	switch r.Request.Type {
 	case "renew-agent-jwt":
 		a, _ := sess.Get("allowed")
@@ -354,7 +359,7 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		logrus.Debugf("offline machines: %#v", offline)
 
 		if len(sendTo)+len(offline) == 0 {
-			sendCommandResultFinished(sess, r.Request.RequestID)
+			sendIsLast(sess, r.Request.RequestID)
 			return fmt.Errorf("found zero hosts to send command to")
 		}
 
@@ -379,7 +384,8 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 
 		go func() {
 			defer requestResponseStore.Done(r.Request.RequestID)
-			defer sendCommandResultFinished(sess, r.Request.RequestID)
+			defer sendIsLast(sess, r.Request.RequestID)
+			//TODO new ctx for timeout when agent does not respond.
 			for range sendTo {
 				select {
 				case resp := <-requestResponseStore.WaitForResponse(r.Request.RequestID):
@@ -412,13 +418,23 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 			return fmt.Errorf("no one is waiting for response")
 		}
 		ch <- r
+	case "admin-apply-spec":
+		defer sendIsLast(sess, r.Request.RequestID)
+		machine := &types.Machine{}
+		err := json.Unmarshal(r.Request.Body, machine)
+		if err != nil {
+			return err
+		}
+		logrus.Info("sending update")
+		machineUpdateCh <- machineUpdate{Machine: machine, Source: protocol.ManualSource}
+		logrus.Info("sending update done")
 	}
 	return nil
 }
 
-func sendCommandResultFinished(sess *melody.Session, reqID string) error {
+func sendIsLast(sess *melody.Session, reqID string) error {
 	msg := &protocol.WebsocketMessage{
-		Type:      "command-result-finished",
+		Type:      "last_message",
 		RequestID: reqID,
 	}
 	b, err := msg.Encode()
@@ -429,8 +445,8 @@ func sendCommandResultFinished(sess *melody.Session, reqID string) error {
 	return sess.Write(b)
 }
 
-func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan *types.Machine) error {
-	dir, err := ioutil.TempDir("", "gmc")
+func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan machineUpdate) error {
+	dir, err := os.MkdirTemp("", "gmc")
 	if err != nil {
 		return err
 	}
@@ -468,7 +484,7 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 			continue
 		}
 		select {
-		case manifestCh <- machine:
+		case manifestCh <- machineUpdate{Machine: machine, Source: protocol.GitSource}:
 		case <-ctx.Done():
 			logrus.Debug("stopping clone")
 			return nil
