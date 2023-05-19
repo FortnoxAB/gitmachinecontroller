@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/fortnoxab/gitmachinecontroller/pkg/websocket"
@@ -17,20 +18,21 @@ type Config struct {
 	Masters Masters `json:"masters"`
 	Token   string  `json:"token"`
 	Ignore  bool    `json:"ignore"`
+	mutex   sync.RWMutex
 }
 
-type Masters []Master
+type Masters []*Master
 
 func (m Masters) string() []string {
 	ret := make([]string, len(m))
 	for i, a := range m {
-		ret[i] = string(a)
+		ret[i] = string(a.URL + "#" + a.Zone)
 	}
 	return ret
 }
 
 func (m Masters) Equal(with Masters) bool {
-	s1 := with.string()
+	s1 := m.string()
 	s2 := with.string()
 	sort.Strings(s1)
 	sort.Strings(s2)
@@ -44,12 +46,28 @@ func (m Masters) Equal(with Masters) bool {
 	return true
 }
 
-func (m *Config) FindMasterForConnection(ctx context.Context, configFile string) string {
+func (m *Config) GetMasters() Masters {
+	masters := Masters{}
+	m.mutex.RLock()
+	masters = append(masters, m.Masters...)
+	m.mutex.RUnlock()
+	return masters
+}
+
+func (m *Config) FindMasterForConnection(ctx context.Context, configFile, zone string) string {
 	for {
-		for _, master := range m.Masters {
+
+		// prioritize the masters in our own zone.
+		// TODO add random order in same zone? to loadbalance between multiple masters?
+		masters := m.GetMasters()
+		sort.Slice(masters, func(i, j int) bool {
+			return masters[i].Zone == zone
+		})
+
+		for _, master := range masters {
 			masters, err := master.isAlive()
 			if err != nil {
-				logrus.Error("master not alive:", err)
+				logrus.Errorf("master %s not alive: %s", master.URL, err)
 				continue
 			}
 			if !masters.Equal(m.Masters) {
@@ -62,7 +80,7 @@ func (m *Config) FindMasterForConnection(ctx context.Context, configFile string)
 					}
 				}
 			}
-			return string(master)
+			return master.URL
 		}
 
 		logrus.Error("found no working master will sleep 10 seconds and try again")
@@ -78,13 +96,16 @@ func (m *Config) FindMasterForConnection(ctx context.Context, configFile string)
 	}
 }
 
-type Master string
+type Master struct {
+	URL  string `json:"name"`
+	Zone string `json:"zone"`
+}
 
 func (m Master) isAlive() (Masters, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	u, err := websocket.ToHTTP(string(m))
+	u, err := websocket.ToHTTP(string(m.URL))
 	if err != nil {
 		return nil, err
 	}

@@ -340,7 +340,7 @@ func (a *Admin) config() (*config.Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			conf = &config.Config{
-				Masters: config.Masters{config.Master("replace me")},
+				Masters: config.Masters{config.Master{URL: "replace me"}},
 			}
 			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {

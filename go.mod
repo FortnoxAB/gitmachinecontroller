@@ -16,6 +16,7 @@ require (
 	github.com/jonaz/ginlogrus v0.0.0-20191118094232-2f4da50f5dd6
 	github.com/olahol/melody v1.1.1
 	github.com/sirupsen/logrus v1.9.0
+	github.com/stretchr/testify v1.8.1
 	github.com/urfave/cli/v2 v2.23.7
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.26.0
@@ -31,6 +32,7 @@ require (
 	github.com/cloudflare/circl v1.3.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.3 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fluxcd/go-git/v5 v5.0.0-20221206140629-ec778c2c37df // indirect
 	github.com/fluxcd/pkg/ssh v0.7.0 // indirect
@@ -56,6 +58,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.6 // indirect
 	github.com/pjbgf/sha1cd v0.2.3 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.14.0 // indirect
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.38.0 // indirect

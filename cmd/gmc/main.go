@@ -80,8 +80,8 @@ func app() *cli.App {
 					Usage: "only print what would have been changed.",
 				},
 				&cli.StringFlag{
-					Name:  "fake-hostname",
-					Usage: "Used for testing purpuses instead of checking hostname with os.Hostname()",
+					Name:  "hostname",
+					Usage: "Set hostname instead of checking hostname with os.Hostname()",
 				},
 				// masters fetch and push over websocket
 				// &cli.DurationFlag{

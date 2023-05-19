@@ -24,28 +24,28 @@ import (
 type OnFunc func(*protocol.WebsocketMessage) error
 
 type Agent struct {
-	Master       string
-	OneShot      bool
-	Dry          bool
-	FakeHostname string
-	wg           *sync.WaitGroup
-	callbacks    map[string][]OnFunc
-	client       websocket.Websocket
-	mutex        sync.RWMutex
-	config       *config.Config
-	configFile   string
+	Master     string
+	OneShot    bool
+	Dry        bool
+	Hostname   string
+	wg         *sync.WaitGroup
+	callbacks  map[string][]OnFunc
+	client     websocket.Websocket
+	mutex      sync.RWMutex
+	config     *config.Config
+	configFile string
 }
 
 func NewAgentFromContext(c *cli.Context) *Agent {
 	m := &Agent{
-		Master:       c.String("master"),
-		configFile:   c.String("config"),
-		OneShot:      c.Bool("one-shot"),
-		Dry:          c.Bool("dry"),
-		FakeHostname: c.String("fake-hostname"),
-		wg:           &sync.WaitGroup{},
-		callbacks:    make(map[string][]OnFunc),
-		client:       websocket.NewWebsocketClient(),
+		Master:     c.String("master"),
+		configFile: c.String("config"),
+		OneShot:    c.Bool("one-shot"),
+		Dry:        c.Bool("dry"),
+		Hostname:   c.String("hostname"),
+		wg:         &sync.WaitGroup{},
+		callbacks:  make(map[string][]OnFunc),
+		client:     websocket.NewWebsocketClient(),
 	}
 	return m
 }
@@ -57,7 +57,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			conf = &config.Config{
-				Masters: config.Masters{config.Master(a.Master)},
+				Masters: config.Masters{config.Master{URL: a.Master}},
 			}
 			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {
@@ -83,8 +83,8 @@ func (a *Agent) run(pCtx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if a.FakeHostname != "" {
-		hostname = a.FakeHostname
+	if a.Hostname != "" {
+		hostname = a.Hostname
 	}
 
 	a.wg.Add(2)
