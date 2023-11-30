@@ -80,6 +80,10 @@ func app() *cli.App {
 					Usage: "only print what would have been changed.",
 				},
 				&cli.StringFlag{
+					Name:  "zone",
+					Usage: "prefered zone for using the closest master first.",
+				},
+				&cli.StringFlag{
 					Name:  "hostname",
 					Usage: "Set hostname instead of checking hostname with os.Hostname()",
 				},

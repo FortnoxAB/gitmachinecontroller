@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fortnoxab/ginprometheus"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/jwt"
@@ -23,13 +24,13 @@ import (
 
 type Webserver struct {
 	Port           string
-	Masters        []string
+	Masters        config.Masters
 	Websocket      *melody.Melody
 	jwt            *jwt.JWTHandler
 	MachineStateCh chan types.MachineStateQuestion
 }
 
-func New(port, jwtKey string, masters []string) *Webserver {
+func New(port, jwtKey string, masters config.Masters) *Webserver {
 	m := melody.New()
 	m.Config.MaxMessageSize = 32 << 20 // 32MB
 	return &Webserver{

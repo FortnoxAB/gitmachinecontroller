@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os"
 	"sort"
@@ -32,6 +33,9 @@ func (m Masters) string() []string {
 }
 
 func (m Masters) Equal(with Masters) bool {
+	if len(m) != len(with) {
+		return false
+	}
 	s1 := m.string()
 	s2 := with.string()
 	sort.Strings(s1)
@@ -54,15 +58,38 @@ func (m *Config) GetMasters() Masters {
 	return masters
 }
 
+// FindMasterForConnection finds a master. If zone is provied its prioritized to use one in our own zone.
 func (m *Config) FindMasterForConnection(ctx context.Context, configFile, zone string) string {
 	for {
 
 		// prioritize the masters in our own zone.
-		// TODO add random order in same zone? to loadbalance between multiple masters?
 		masters := m.GetMasters()
-		sort.Slice(masters, func(i, j int) bool {
-			return masters[i].Zone == zone
-		})
+		if zone != "" {
+			mastersMyZone := Masters{}
+			mastersOtherZones := Masters{}
+			for _, s := range masters {
+				if s.Zone == zone {
+					mastersMyZone = append(mastersMyZone, s)
+				} else {
+					mastersOtherZones = append(mastersOtherZones, s)
+				}
+				rand.Shuffle(len(mastersMyZone), func(i, j int) {
+					mastersMyZone[i], mastersMyZone[j] = mastersMyZone[j], mastersMyZone[i]
+				})
+
+				rand.Shuffle(len(mastersOtherZones), func(i, j int) {
+					mastersOtherZones[i], mastersOtherZones[j] = mastersOtherZones[j], mastersOtherZones[i]
+				})
+				masters = append(mastersMyZone, mastersOtherZones...)
+			}
+			// sort.Slice(masters, func(i, j int) bool {
+			// 	return masters[i].Zone == zone
+			// })
+		} else {
+			rand.Shuffle(len(masters), func(i, j int) {
+				masters[i], masters[j] = masters[j], masters[i]
+			})
+		}
 
 		for _, master := range masters {
 			masters, err := master.isAlive()

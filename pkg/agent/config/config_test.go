@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +14,7 @@ import (
 
 func TestFindMasterForConnection(t *testing.T) {
 	config := &Config{}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		err := json.NewEncoder(w).Encode(config)
 		assert.NoError(t, err)
 		fmt.Fprintln(w, "Hello, client")
@@ -47,7 +48,9 @@ func TestFindMasterForConnection(t *testing.T) {
 	assert.Contains(t, s, "z3-1")
 
 	s = config.FindMasterForConnection(context.Background(), "/tmp/gmc.json", "z2")
-	assert.Contains(t, s, "z2-1")
+	if !strings.Contains(s, "z2-1") && !strings.Contains(s, "z2-2") { // we randomize order so me must check for 2 zones
+		t.Error("wrong zone")
+	}
 	fmt.Println(s)
 
 }

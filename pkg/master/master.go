@@ -13,12 +13,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fluxcd/pkg/git"
 	"github.com/fluxcd/pkg/git/gogit"
 	"github.com/fluxcd/pkg/git/repository"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/webserver"
@@ -81,7 +83,7 @@ type Master struct {
 	SecretKey         string
 	JWTKey            string
 	WsPort            string
-	Masters           []string
+	Masters           config.Masters
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
 }
@@ -99,8 +101,21 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		SecretKey:         c.String("secret-key"),
 		JWTKey:            c.String("jwt-key"),
 		WsPort:            c.String("port"),
-		Masters:           c.StringSlice("master"),
 	}
+
+	masters := config.Masters{}
+	for _, m := range c.StringSlice("master") {
+		tmp := strings.Split(m, ";")
+
+		fmt.Println(tmp)
+		master := &config.Master{URL: tmp[0]}
+		if len(tmp) > 1 {
+			master.Zone = tmp[1]
+		}
+		masters = append(masters, master)
+	}
+	m.Masters = masters
+
 	return m
 }
 
@@ -230,7 +245,6 @@ func (m *Master) run(ctx context.Context) error {
 }
 
 func (m *Master) stateRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest, machineUpd chan machineUpdate) {
-	//TODO add timestamp and IP and make it accessable from /pending-machines to print all machines?
 	machines := make(map[string]*types.MachineState)
 	for {
 		select {

@@ -61,7 +61,7 @@ func (a *Admin) wsConnect(ctx context.Context, conf *config.Config) (websocket.W
 
 	wsClient := websocket.NewWebsocketClient()
 
-	master := conf.FindMasterForConnection(ctx, "")
+	master := conf.FindMasterForConnection(ctx, "", "")
 
 	u, err := websocket.ToWS(master)
 	if err != nil {
@@ -291,7 +291,11 @@ func (a *Admin) Proxy(ctx context.Context) error {
 		return err
 	}
 
-	target, err := url.Parse(conf.FindMasterForConnection(ctx, ""))
+	target, err := url.Parse(conf.FindMasterForConnection(ctx, "", ""))
+	if err != nil {
+		return err
+	}
+
 	target.RawQuery = ""
 	target.Path = ""
 
@@ -340,7 +344,7 @@ func (a *Admin) config() (*config.Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			conf = &config.Config{
-				Masters: config.Masters{config.Master{URL: "replace me"}},
+				Masters: config.Masters{&config.Master{URL: "replace me"}},
 			}
 			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {

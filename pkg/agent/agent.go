@@ -28,6 +28,7 @@ type Agent struct {
 	OneShot    bool
 	Dry        bool
 	Hostname   string
+	Zone       string
 	wg         *sync.WaitGroup
 	callbacks  map[string][]OnFunc
 	client     websocket.Websocket
@@ -43,6 +44,7 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		OneShot:    c.Bool("one-shot"),
 		Dry:        c.Bool("dry"),
 		Hostname:   c.String("hostname"),
+		Zone:       c.String("zone"),
 		wg:         &sync.WaitGroup{},
 		callbacks:  make(map[string][]OnFunc),
 		client:     websocket.NewWebsocketClient(),
@@ -57,7 +59,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			conf = &config.Config{
-				Masters: config.Masters{config.Master{URL: a.Master}},
+				Masters: config.Masters{&config.Master{URL: a.Master}},
 			}
 			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {
@@ -91,7 +93,7 @@ func (a *Agent) run(pCtx context.Context) error {
 	go func() {
 		defer a.wg.Done()
 		for {
-			master := a.config.FindMasterForConnection(pCtx, a.configFile)
+			master := a.config.FindMasterForConnection(pCtx, a.configFile, a.Zone)
 
 			if pCtx.Err() != nil {
 				return
