@@ -1,6 +1,6 @@
 module github.com/fortnoxab/gitmachinecontroller
 
-go 1.19
+go 1.23
 
 require (
 	github.com/fatih/color v1.13.0
@@ -16,7 +16,7 @@ require (
 	github.com/jonaz/ginlogrus v0.0.0-20191118094232-2f4da50f5dd6
 	github.com/olahol/melody v1.1.1
 	github.com/sirupsen/logrus v1.9.0
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.9.0
 	github.com/urfave/cli/v2 v2.23.7
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.26.0

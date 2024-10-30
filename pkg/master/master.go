@@ -2,13 +2,8 @@ package master
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -459,15 +454,49 @@ func sendIsLast(sess *melody.Session, reqID string) error {
 	return sess.Write(b)
 }
 
+type Cloner interface {
+	Clone(ctx context.Context, url string, cloneOpts repository.CloneOptions) (*git.Commit, error)
+	Close()
+}
+
+type testCloner struct {
+	dir string
+}
+
+func (tc *testCloner) Clone(ctx context.Context, URL string, cloneOpts repository.CloneOptions) (*git.Commit, error) {
+
+	u, err := url.Parse(URL)
+	if err != nil {
+		return nil, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	from := filepath.Join(cwd, u.Path)
+	logrus.Infof("testCloner: copy %s to %s", from, tc.dir)
+	err = os.CopyFS(tc.dir, os.DirFS(from))
+	return nil, err
+}
+func (tc *testCloner) Close() {
+
+}
+
 func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan machineUpdate) error {
 	dir, err := os.MkdirTemp("", "gmc")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	gitClient, err := gogit.NewClient(dir, authOpts)
-	if err != nil {
-		return err
+	var gitClient Cloner
+	if authOpts.Host == "test" {
+		gitClient = &testCloner{dir: dir}
+	} else {
+		gitClient, err = gogit.NewClient(dir, authOpts)
+		if err != nil {
+			return err
+		}
 	}
 	defer gitClient.Close()
 
@@ -512,13 +541,13 @@ func (m *Master) identity() (map[string][]byte, error) {
 
 	i, err := os.ReadFile(m.GitIdentifyPath)
 	if err != nil {
-		return nil, err
+		logrus.Warnf("error fetching GitIdentifyPath: %s", err)
 	}
 	authData["identity"] = i
 
 	kh, err := os.ReadFile(m.GitKnownHostsPath)
 	if err != nil {
-		return nil, err
+		logrus.Warnf("error fetching GitKnownHostsPath: %s", err)
 	}
 	authData["known_hosts"] = kh
 
@@ -529,6 +558,9 @@ func (m *Master) identity() (map[string][]byte, error) {
 	return authData, nil
 }
 
+/*
+
+// TODO implement encrypted strings
 func (m *Master) encryptSecret(plaintext []byte) (string, error) {
 	key := sha256.Sum256([]byte(m.SecretKey))
 
@@ -575,3 +607,4 @@ func (m *Master) decryptSecret(ciphertext []byte) (string, error) {
 
 	return string(plaintext), nil
 }
+*/

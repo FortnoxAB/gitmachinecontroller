@@ -51,6 +51,15 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 	}
 	return m
 }
+func NewAgent(configFile string) *Agent {
+	m := &Agent{
+		wg:         &sync.WaitGroup{},
+		callbacks:  make(map[string][]OnFunc),
+		client:     websocket.NewWebsocketClient(),
+		configFile: configFile,
+	}
+	return m
+}
 
 func (a *Agent) Run(ctx context.Context) error {
 	conf, err := config.FromFile(a.configFile)
@@ -213,9 +222,6 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 }
 
 func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
-	// TODO if msg.Source is protocol.ManualSource and manifest has annotation gmc.io/ignore = "true"
-	// then save local state and config on disk that we ignore git updates until the annotation is removed.
-
 	if msg.Source == protocol.GitSource && a.config.Ignore {
 		logrus.Debug("ignore reconciliation since we have gmc.io/ignore=true")
 		return nil
@@ -244,7 +250,6 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 
 	recon := &reconciliation.MachineReconciler{}
 	return recon.Reconcile(machine)
-	// return nil
 }
 
 func (a *Agent) reader(ctx context.Context) {
