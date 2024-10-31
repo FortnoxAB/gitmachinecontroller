@@ -79,6 +79,7 @@ type Master struct {
 	JWTKey            string
 	WsPort            string
 	Masters           config.Masters
+	EnableMetrics     bool
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
 }
@@ -96,6 +97,7 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		SecretKey:         c.String("secret-key"),
 		JWTKey:            c.String("jwt-key"),
 		WsPort:            c.String("port"),
+		EnableMetrics:     true,
 	}
 
 	masters := config.Masters{}
@@ -122,6 +124,7 @@ func (m *Master) Run(ctx context.Context) error {
 	m.machineStateCh = make(chan types.MachineStateQuestion)
 	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters)
 	m.webserver.MachineStateCh = m.machineStateCh
+	m.webserver.EnableMetrics = m.EnableMetrics
 	go m.webserver.Start(ctx)
 
 	return m.run(ctx)

@@ -1,0 +1,8 @@
+packages:
+  github.com/fortnoxab/gitmachinecontroller/pkg/agent/command:
+    interfaces:
+      # select the interfaces you want mocked
+      Commander:
+        config:
+          outpkg: mocks
+          dir: ../../mocks

@@ -31,7 +31,7 @@ func (mr *MachineReconciler) files(files types.Files) error {
 		if file.URL != "" {
 			changed, err := fetchFromURL(file)
 			if err != nil {
-				logrus.Errorf("files: %s failed with error: %s", file.Path, err)
+				logrus.Errorf("files: %s failed to fetch from URL with error: %s", file.Path, err)
 				continue
 			}
 			if changed {
@@ -43,7 +43,7 @@ func (mr *MachineReconciler) files(files types.Files) error {
 		if file.Content != "" {
 			changed, err := writeContentIfNeeded(file)
 			if err != nil {
-				logrus.Errorf("files: %s failed with error: %s", file.Path, err)
+				logrus.Errorf("files: %s failed write file content with error: %s", file.Path, err)
 				continue
 			}
 			if changed {
@@ -60,18 +60,29 @@ func writeContentIfNeeded(file *types.File) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err := os.Stat(file.Path); errors.Is(err, os.ErrNotExist) { // New file we can write directly to desired location
+	statedFile, err := os.Stat(file.Path)
+	if errors.Is(err, os.ErrNotExist) { // New file we can write directly to desired location
 		err = os.WriteFile(file.Path, []byte(file.Content), mode)
 		if err != nil {
 			return false, err
 		}
 		return true, nil
 	}
-	equal, err := fileEqual(file.Content, file.Path)
-	if err != nil {
-		return false, err
+
+	equal := true
+	if int64(len(file.Content)) != statedFile.Size() {
+		equal, err = fileEqual(file.Content, file.Path)
+		if err != nil {
+			return false, err
+		}
 	}
 	if equal {
+		if mode != statedFile.Mode() { // check if content was same but we need to update mode
+			err = os.Chmod(file.Path, mode)
+			if err != nil {
+				return false, err
+			}
+		}
 		logrus.Debug(file.Path, " already equal")
 		return false, nil
 	}
@@ -82,15 +93,23 @@ func writeContentIfNeeded(file *types.File) (bool, error) {
 		return false, err
 	}
 	defer tempFile.Close()
-	tempFile.Chmod(mode)
+	err = tempFile.Chmod(mode)
+
+	if err != nil {
+		return false, err
+	}
 
 	_, err = io.Copy(tempFile, bytes.NewBufferString(file.Content))
 	if err != nil {
 		return false, err
 	}
 
-	tempFile.Close()
-	return true, os.Rename(tempFile.Name(), file.Path)
+	tempFile.Close() // close it so we can rename it (move it)
+	err = os.Rename(tempFile.Name(), file.Path)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func needsFetch(file *types.File) (bool, error) {

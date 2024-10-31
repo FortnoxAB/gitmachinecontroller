@@ -28,6 +28,7 @@ type Webserver struct {
 	Websocket      *melody.Melody
 	jwt            *jwt.JWTHandler
 	MachineStateCh chan types.MachineStateQuestion
+	EnableMetrics  bool
 }
 
 func New(port, jwtKey string, masters config.Masters) *Webserver {
@@ -43,8 +44,10 @@ func New(port, jwtKey string, masters config.Masters) *Webserver {
 
 func (ws *Webserver) Init() *gin.Engine {
 	router := gin.New()
-	p := ginprometheus.New("http")
-	p.Use(router)
+	if ws.EnableMetrics {
+		p := ginprometheus.New("http")
+		p.Use(router)
+	}
 
 	logIgnorePaths := []string{
 		"/health",

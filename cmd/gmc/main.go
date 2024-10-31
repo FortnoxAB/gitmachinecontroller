@@ -1,3 +1,5 @@
+//go:generate go install github.com/vektra/mockery/v2@v2.45.1
+//go:generate mockery
 package main
 
 import (
