@@ -79,6 +79,7 @@ type Master struct {
 	JWTKey            string
 	WsPort            string
 	Masters           config.Masters
+	EnableMetrics     bool
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
 }
@@ -96,6 +97,7 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		SecretKey:         c.String("secret-key"),
 		JWTKey:            c.String("jwt-key"),
 		WsPort:            c.String("port"),
+		EnableMetrics:     true,
 	}
 
 	masters := config.Masters{}
@@ -122,6 +124,7 @@ func (m *Master) Run(ctx context.Context) error {
 	m.machineStateCh = make(chan types.MachineStateQuestion)
 	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters)
 	m.webserver.MachineStateCh = m.machineStateCh
+	m.webserver.EnableMetrics = m.EnableMetrics
 	go m.webserver.Start(ctx)
 
 	return m.run(ctx)
@@ -337,6 +340,11 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 
 	case "run-command-request":
 		if admin, _ := sess.Get("admin"); !admin.(bool) {
+			err := sendIsLast(sess, r.Request.RequestID)
+			if err != nil {
+				logrus.Error(err)
+			}
+
 			return fmt.Errorf("run-command-request permission denied")
 		}
 		cmdReq := &protocol.RunCommandRequest{}
@@ -428,6 +436,9 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		}
 		ch <- r
 	case "admin-apply-spec":
+		if admin, _ := sess.Get("admin"); !admin.(bool) {
+			return fmt.Errorf("admin-apply-spec permission denied")
+		}
 		defer sendIsLast(sess, r.Request.RequestID)
 		machine := &types.Machine{}
 		err := json.Unmarshal(r.Request.Body, machine)

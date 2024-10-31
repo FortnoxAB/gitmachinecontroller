@@ -54,6 +54,15 @@ func NewAdminFromContext(c *cli.Context) *Admin {
 	}
 }
 
+func NewAdmin(configFile, selector, regexp string) *Admin {
+
+	return &Admin{
+		configFile: configFile,
+		selector:   selector,
+		regexp:     regexp,
+	}
+}
+
 func (a *Admin) wsConnect(ctx context.Context, conf *config.Config) (websocket.Websocket, error) {
 	headers := http.Header{}
 	headers.Add("X-VERSION", build.JSON())

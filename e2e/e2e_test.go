@@ -3,83 +3,41 @@ package e2e_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/fortnoxab/gitmachinecontroller/pkg/agent"
-	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
-	"github.com/fortnoxab/gitmachinecontroller/pkg/master"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/admin"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
-func initMasterAgent(t *testing.T) (*master.Master, *agent.Agent, func()) {
-	master := &master.Master{
-		GitURL:          "https://test/gitrepo",
-		GitPollInterval: time.Minute,
-		WsPort:          "9876",
-		Masters: config.Masters{
-			{
-				URL:  "http://localhost:9876",
-				Zone: "zone1",
-			},
-		},
-	}
-	agent := agent.NewAgent("./agentConfig")
-	agent.Master = "http://localhost:9876"
-	agent.Hostname = "mycooltestagent"
-	return master, agent, func() {
-		os.Remove("./agentConfig")
-	}
-}
-
 func TestMasterAgentAccept(t *testing.T) {
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-
-	master, agent, closer := initMasterAgent(t)
+	c, closer := initMasterAgent(t, ctx)
 	defer closer()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := master.Run(ctx)
-		assert.NoError(t, err)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := agent.Run(ctx)
-		assert.NoError(t, err)
-	}()
-
-	client := NewAuthedHttpClient(t, "http://localhost:9876")
-	resp, err := client.Get("/machines")
+	resp, err := c.client.Get("/machines")
 	assert.NoError(t, err)
 	body := getBody(t, resp.Body)
 	assert.Contains(t, body, "acceptHost('mycooltestagent')")
 	assert.Contains(t, body, ">Accept<")
 
-	resp, err = client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
-	body = getBody(t, resp.Body)
-	fmt.Println("accept resp", body)
 
 	time.Sleep(200 * time.Millisecond)
-	resp, err = client.Get("/machines")
+	resp, err = c.client.Get("/machines")
 	assert.NoError(t, err)
 	body = getBody(t, resp.Body)
 	assert.NotContains(t, body, ">Accept<")
 
-	resp, err = client.Get("/api/machines-v1")
+	resp, err = c.client.Get("/api/machines-v1")
 	assert.NoError(t, err)
 	body = getBody(t, resp.Body)
 	assert.Contains(t, body, `"name":"mycooltestagent"`)
@@ -89,63 +47,223 @@ func TestMasterAgentAccept(t *testing.T) {
 	assert.Contains(t, body, `"Git":false`)
 
 	cancel()
-	wg.Wait()
+	c.wg.Wait()
 }
+func TestMasterAgentGitOps(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "the file content")
+	}))
+	defer ts.Close()
+	machineYaml := fmt.Sprintf(`apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  commands: []
+  files:
+  - checksum: 9b76e7ea790545334ea524f3ca33db8eb6c4541a9b476911e5abf850a566b41c
+    path: /tmp/testfromurl
+    url: %s
+  - content: |
+      [Unit]
+      Description=Mimir Service
+      After=network.target
 
-type authedHttpClient struct {
-	token   string
-	baseURL string
-}
+      [Service]
+      Type=simple
+      User=root
+      Group=root
+      ExecStart=/usr/local/sbin/mimir -config.file=/etc/mimir.yml
+      SuccessExitStatus=0
+      TimeoutSec=30
+      SyslogIdentifier=mimir
+      Restart=on-failure
+      RestartSec=3
+      LimitNOFILE=1048576
 
-func NewAuthedHttpClient(t *testing.T, baseURL string) *authedHttpClient {
-	type tokenStruct struct {
-		Jwt string
-	}
+      [Install]
+      WantedBy=multi-user.target
+    path: /tmp/test.systemd
+    systemd:
+      action: restart
+      name: exporter_exporter
+      daemonreload: true
+  ip: 10.81.22.150
+  lines: []
+  packages:
+  - name: vim-enhanced
+    version: '*'
+  - name: mycoolpackage
+    version: '*'`, ts.URL)
 
-	time.Sleep(200 * time.Millisecond)
-	resp, err := http.Post("http://localhost:9876/api/admin-v1", "application/json", nil)
+	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
-	defer resp.Body.Close()
+	defer os.Remove("./gitrepo/mycooltestagent.yml")
+	defer os.Remove("/tmp/test.systemd")
+	defer os.Remove("/tmp/testfromurl")
 
-	token := &tokenStruct{}
-	err = json.NewDecoder(resp.Body).Decode(token)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c, closer := initMasterAgent(t, ctx)
+	defer closer()
+
+	c.commander.Mock.On("Run", "systemctl restart exporter_exporter").Return("", "", nil).Once()
+	c.commander.Mock.On("Run", "systemctl daemon reload").Return("", "", nil).Once()
+
+	// return 0 means its already installed
+	c.commander.Mock.On("RunExpectCodes", "rpm -q vim-enhanced", 0, 1).Return("", 0, nil).Twice()
+
+	// return 1 means its not installed yet and we'll try to install it
+	c.commander.Mock.On("RunExpectCodes", "rpm -q mycoolpackage", 0, 1).Return("", 1, nil).Twice()
+	c.commander.Mock.On("Run", "rpm -q --whatprovides mycoolpackage").Return("mycoolpackage", "", nil).Twice()
+	c.commander.Mock.On("Run", "yum install -y mycoolpackage").Return("", "", nil).Twice()
+
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
 
-	fmt.Println("my token is", token.Jwt)
-	return &authedHttpClient{
-		token:   token.Jwt,
-		baseURL: baseURL,
-	}
-}
+	time.Sleep(2 * time.Second)
 
-func (ahc *authedHttpClient) Post(u string, body io.Reader) (resp *http.Response, err error) {
-	u = strings.TrimLeft(u, "/")
-
-	req, err := http.NewRequest(http.MethodPost, ahc.baseURL+"/"+u, body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Authorization", ahc.token)
-
-	return http.DefaultClient.Do(req)
-}
-func (ahc *authedHttpClient) Get(u string) (resp *http.Response, err error) {
-	u = strings.TrimLeft(u, "/")
-
-	req, err := http.NewRequest(http.MethodGet, ahc.baseURL+"/"+u, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Authorization", ahc.token)
-
-	return http.DefaultClient.Do(req)
-}
-
-func getBody(t *testing.T, b io.ReadCloser) string {
-
-	d, err := io.ReadAll(b)
+	// make sure we fetched file from http server with sha256 hash
+	content, err := os.ReadFile("/tmp/testfromurl")
 	assert.NoError(t, err)
-	return string(d)
+	assert.EqualValues(t, "the file content", content)
+
+	cancel()
+	c.wg.Wait()
+}
+
+func TestCliCommand(t *testing.T) {
+	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  ip: 127.0.0.1
+  lines: []`
+
+	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./gitrepo/mycooltestagent.yml")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c, closer := initMasterAgent(t, ctx)
+	defer closer()
+
+	c.commander.Mock.On("RunWithCode", "uptime").Return(" 14:43:12 up 56 days, 23:56,  1 user,  load average: 0,71, 0,58, 0,46", "", 0, nil).Once()
+
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
+	assert.NoError(t, err)
+
+	time.Sleep(2 * time.Second)
+
+	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
+		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
+		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./adminConfig")
+
+	stdout := captureStdout()
+
+	a := admin.NewAdmin("./adminConfig", "", "")
+	err = a.Exec(context.TODO(), "uptime")
+	assert.NoError(t, err)
+
+	out := stdout()
+	assert.Contains(t, out, " 14:43:12 up 56 days, 23:56,  1 user,  load average: 0,71, 0,58, 0,46")
+	assert.Contains(t, out, "mycooltestagent:")
+
+	cancel()
+	c.wg.Wait()
+}
+
+func TestCliCommandInvalidToken(t *testing.T) {
+	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  ip: 127.0.0.1
+  lines: []`
+
+	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./gitrepo/mycooltestagent.yml")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c, closer := initMasterAgent(t, ctx)
+	defer closer()
+
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
+	assert.NoError(t, err)
+
+	time.Sleep(2 * time.Second)
+
+	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
+		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
+		"token":"%s"}`, c.master.WsPort, "blaha")), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./adminConfig")
+
+	buf := &bytes.Buffer{}
+	logrus.SetOutput(buf)
+	a := admin.NewAdmin("./adminConfig", "", "")
+	err = a.Exec(context.TODO(), "uptime")
+	assert.Equal(t, "websocket: bad handshake", err.Error())
+
+	assert.Contains(t, buf.String(), "Error #01: auth: error validating")
+	cancel()
+	c.wg.Wait()
+}
+
+func TestCliCommandNotAdminToken(t *testing.T) {
+	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  ip: 127.0.0.1
+  lines: []`
+
+	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./gitrepo/mycooltestagent.yml")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c, closer := initMasterAgent(t, ctx)
+	defer closer()
+
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
+	assert.NoError(t, err)
+
+	time.Sleep(2 * time.Second)
+
+	buf := &bytes.Buffer{}
+	logrus.SetOutput(buf)
+	a := admin.NewAdmin("./agentConfig", "", "")
+	err = a.Exec(context.TODO(), "uptime")
+	assert.NoError(t, err)
+
+	assert.Contains(t, buf.String(), "run-command-request permission denied")
+
+	cancel()
+	c.wg.Wait()
 }

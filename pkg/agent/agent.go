@@ -35,6 +35,7 @@ type Agent struct {
 	mutex      sync.RWMutex
 	config     *config.Config
 	configFile string
+	commander  command.Commander
 }
 
 func NewAgentFromContext(c *cli.Context) *Agent {
@@ -48,15 +49,17 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		wg:         &sync.WaitGroup{},
 		callbacks:  make(map[string][]OnFunc),
 		client:     websocket.NewWebsocketClient(),
+		commander:  &command.Exec{},
 	}
 	return m
 }
-func NewAgent(configFile string) *Agent {
+func NewAgent(configFile string, commander command.Commander) *Agent {
 	m := &Agent{
 		wg:         &sync.WaitGroup{},
 		callbacks:  make(map[string][]OnFunc),
 		client:     websocket.NewWebsocketClient(),
 		configFile: configFile,
+		commander:  commander,
 	}
 	return m
 }
@@ -197,7 +200,7 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 		return err
 	}
 
-	stdout, stderr, code, err := command.RunWithCode(cmd)
+	stdout, stderr, code, err := a.commander.RunWithCode(cmd)
 	cr := &protocol.CommandResult{
 		Stdout: stdout,
 		Stderr: stderr,
@@ -248,7 +251,7 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 		}
 	}
 
-	recon := &reconciliation.MachineReconciler{}
+	recon := reconciliation.NewMachineReconciler(a.commander)
 	return recon.Reconcile(machine)
 }
 
