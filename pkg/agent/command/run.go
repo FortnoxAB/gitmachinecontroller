@@ -8,11 +8,20 @@ import (
 	"github.com/google/shlex"
 )
 
-func Run(command string) (string, string, error) {
-	stdout, stderr, _, err := RunWithCode(command)
+type Commander interface {
+	Run(command string) (string, string, error)
+	RunWithCode(command string) (string, string, int, error)
+	RunExpectCodes(command string, codes ...int) (string, int, error)
+}
+
+type Exec struct {
+}
+
+func (e *Exec) Run(command string) (string, string, error) {
+	stdout, stderr, _, err := e.RunWithCode(command)
 	return stdout, stderr, err
 }
-func RunWithCode(command string) (string, string, int, error) {
+func (e *Exec) RunWithCode(command string) (string, string, int, error) {
 	args, err := shlex.Split(command)
 	if err != nil {
 		return "", "", -1, err
@@ -30,7 +39,7 @@ func RunWithCode(command string) (string, string, int, error) {
 	return strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()), code, nil
 }
 
-func RunExpectCodes(command string, codes ...int) (string, int, error) {
+func (e *Exec) RunExpectCodes(command string, codes ...int) (string, int, error) {
 	args, err := shlex.Split(command)
 	if err != nil {
 		return "", 1, err

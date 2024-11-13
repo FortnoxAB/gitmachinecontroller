@@ -2,13 +2,8 @@ package master
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -84,6 +79,7 @@ type Master struct {
 	JWTKey            string
 	WsPort            string
 	Masters           config.Masters
+	EnableMetrics     bool
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
 }
@@ -101,6 +97,7 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		SecretKey:         c.String("secret-key"),
 		JWTKey:            c.String("jwt-key"),
 		WsPort:            c.String("port"),
+		EnableMetrics:     true,
 	}
 
 	masters := config.Masters{}
@@ -127,6 +124,7 @@ func (m *Master) Run(ctx context.Context) error {
 	m.machineStateCh = make(chan types.MachineStateQuestion)
 	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters)
 	m.webserver.MachineStateCh = m.machineStateCh
+	m.webserver.EnableMetrics = m.EnableMetrics
 	go m.webserver.Start(ctx)
 
 	return m.run(ctx)
@@ -342,6 +340,11 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 
 	case "run-command-request":
 		if admin, _ := sess.Get("admin"); !admin.(bool) {
+			err := sendIsLast(sess, r.Request.RequestID)
+			if err != nil {
+				logrus.Error(err)
+			}
+
 			return fmt.Errorf("run-command-request permission denied")
 		}
 		cmdReq := &protocol.RunCommandRequest{}
@@ -433,6 +436,9 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		}
 		ch <- r
 	case "admin-apply-spec":
+		if admin, _ := sess.Get("admin"); !admin.(bool) {
+			return fmt.Errorf("admin-apply-spec permission denied")
+		}
 		defer sendIsLast(sess, r.Request.RequestID)
 		machine := &types.Machine{}
 		err := json.Unmarshal(r.Request.Body, machine)
@@ -459,15 +465,49 @@ func sendIsLast(sess *melody.Session, reqID string) error {
 	return sess.Write(b)
 }
 
+type Cloner interface {
+	Clone(ctx context.Context, url string, cloneOpts repository.CloneOptions) (*git.Commit, error)
+	Close()
+}
+
+type testCloner struct {
+	dir string
+}
+
+func (tc *testCloner) Clone(ctx context.Context, URL string, cloneOpts repository.CloneOptions) (*git.Commit, error) {
+
+	u, err := url.Parse(URL)
+	if err != nil {
+		return nil, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	from := filepath.Join(cwd, u.Path)
+	logrus.Infof("testCloner: copy %s to %s", from, tc.dir)
+	err = os.CopyFS(tc.dir, os.DirFS(from))
+	return nil, err
+}
+func (tc *testCloner) Close() {
+
+}
+
 func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan machineUpdate) error {
 	dir, err := os.MkdirTemp("", "gmc")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	gitClient, err := gogit.NewClient(dir, authOpts)
-	if err != nil {
-		return err
+	var gitClient Cloner
+	if authOpts.Host == "test" {
+		gitClient = &testCloner{dir: dir}
+	} else {
+		gitClient, err = gogit.NewClient(dir, authOpts)
+		if err != nil {
+			return err
+		}
 	}
 	defer gitClient.Close()
 
@@ -512,13 +552,13 @@ func (m *Master) identity() (map[string][]byte, error) {
 
 	i, err := os.ReadFile(m.GitIdentifyPath)
 	if err != nil {
-		return nil, err
+		logrus.Warnf("error fetching GitIdentifyPath: %s", err)
 	}
 	authData["identity"] = i
 
 	kh, err := os.ReadFile(m.GitKnownHostsPath)
 	if err != nil {
-		return nil, err
+		logrus.Warnf("error fetching GitKnownHostsPath: %s", err)
 	}
 	authData["known_hosts"] = kh
 
@@ -529,6 +569,9 @@ func (m *Master) identity() (map[string][]byte, error) {
 	return authData, nil
 }
 
+/*
+
+// TODO implement encrypted strings
 func (m *Master) encryptSecret(plaintext []byte) (string, error) {
 	key := sha256.Sum256([]byte(m.SecretKey))
 
@@ -575,3 +618,4 @@ func (m *Master) decryptSecret(ciphertext []byte) (string, error) {
 
 	return string(plaintext), nil
 }
+*/

@@ -28,6 +28,7 @@ type Webserver struct {
 	Websocket      *melody.Melody
 	jwt            *jwt.JWTHandler
 	MachineStateCh chan types.MachineStateQuestion
+	EnableMetrics  bool
 }
 
 func New(port, jwtKey string, masters config.Masters) *Webserver {
@@ -43,8 +44,10 @@ func New(port, jwtKey string, masters config.Masters) *Webserver {
 
 func (ws *Webserver) Init() *gin.Engine {
 	router := gin.New()
-	p := ginprometheus.New("http")
-	p.Use(router)
+	if ws.EnableMetrics {
+		p := ginprometheus.New("http")
+		p.Use(router)
+	}
 
 	logIgnorePaths := []string{
 		"/health",
@@ -64,6 +67,16 @@ func (ws *Webserver) Init() *gin.Engine {
 	requireAdmin.POST("/api/machines/accept-v1", err(ws.approveMachine))
 	requireAdmin.GET("/api/authed-v1", func(*gin.Context) {})
 	requireAdmin.GET("/machines", err(ws.listPendingMachines))
+	requireAdmin.GET("/api/machines-v1", err(func(c *gin.Context) error {
+
+		hostList, err := ws.hostList()
+		if err != nil {
+			return err
+		}
+
+		c.JSON(http.StatusOK, hostList)
+		return nil
+	}))
 
 	ws.initWS(router)
 
@@ -177,16 +190,30 @@ const acceptHost = (hostname) =>  {
 		return err
 	}
 
-	type host struct {
-		Name       string `json:"name"`
-		IP         string `json:"ip"`
-		Online     bool
-		Accepted   bool
-		Git        bool
-		LastUpdate time.Time
+	hostList, err := ws.hostList()
+	if err != nil {
+		return err
 	}
+
+	return tmpl.Execute(c.Writer, hostList)
+}
+
+type host struct {
+	Name       string `json:"name"`
+	IP         string `json:"ip"`
+	Online     bool
+	Accepted   bool
+	Git        bool
+	LastUpdate time.Time
+}
+
+func (ws *Webserver) hostList() (map[string]*host, error) {
 	hostList := make(map[string]*host)
 	sessions, err := ws.Websocket.Sessions()
+	if err != nil {
+		return nil, err
+	}
+
 	ch := make(chan map[string]*types.MachineState)
 	ws.MachineStateCh <- types.MachineStateQuestion{ReplyCh: ch}
 	list := <-ch
@@ -222,8 +249,7 @@ const acceptHost = (hostname) =>  {
 			hostList[name.(string)].Online = true
 		}
 	}
-
-	return tmpl.Execute(c.Writer, hostList)
+	return hostList, nil
 }
 
 func (ws *Webserver) initWS(router *gin.Engine) {
@@ -336,4 +362,4 @@ func err(f func(c *gin.Context) error) gin.HandlerFunc {
 	}
 }
 
-var jwtKey = []byte("supersecretkey")
+// var jwtKey = []byte("supersecretkey")

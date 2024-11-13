@@ -35,6 +35,7 @@ type Agent struct {
 	mutex      sync.RWMutex
 	config     *config.Config
 	configFile string
+	commander  command.Commander
 }
 
 func NewAgentFromContext(c *cli.Context) *Agent {
@@ -48,6 +49,17 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 		wg:         &sync.WaitGroup{},
 		callbacks:  make(map[string][]OnFunc),
 		client:     websocket.NewWebsocketClient(),
+		commander:  &command.Exec{},
+	}
+	return m
+}
+func NewAgent(configFile string, commander command.Commander) *Agent {
+	m := &Agent{
+		wg:         &sync.WaitGroup{},
+		callbacks:  make(map[string][]OnFunc),
+		client:     websocket.NewWebsocketClient(),
+		configFile: configFile,
+		commander:  commander,
 	}
 	return m
 }
@@ -188,7 +200,7 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 		return err
 	}
 
-	stdout, stderr, code, err := command.RunWithCode(cmd)
+	stdout, stderr, code, err := a.commander.RunWithCode(cmd)
 	cr := &protocol.CommandResult{
 		Stdout: stdout,
 		Stderr: stderr,
@@ -213,9 +225,6 @@ func (a *Agent) onRunCommand(msg *protocol.WebsocketMessage) error {
 }
 
 func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
-	// TODO if msg.Source is protocol.ManualSource and manifest has annotation gmc.io/ignore = "true"
-	// then save local state and config on disk that we ignore git updates until the annotation is removed.
-
 	if msg.Source == protocol.GitSource && a.config.Ignore {
 		logrus.Debug("ignore reconciliation since we have gmc.io/ignore=true")
 		return nil
@@ -242,9 +251,8 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 		}
 	}
 
-	recon := &reconciliation.MachineReconciler{}
+	recon := reconciliation.NewMachineReconciler(a.commander)
 	return recon.Reconcile(machine)
-	// return nil
 }
 
 func (a *Agent) reader(ctx context.Context) {
