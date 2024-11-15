@@ -225,7 +225,6 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 
 	sendManifest := func(path string) error {
 		machine := &types.Machine{}
-		// path := filepath.Join(arg, f.Name())
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("error opening: %s err: %s", path, err)

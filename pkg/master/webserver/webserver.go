@@ -342,7 +342,7 @@ func (ws *Webserver) ApproveAgent(hostname string) error {
 			if err != nil {
 				return err
 			}
-			break
+			return nil
 		}
 	}
 	return nil
