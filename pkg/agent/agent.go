@@ -235,19 +235,27 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 	if err != nil {
 		return err
 	}
+
 	if machine.Metadata != nil &&
 		machine.Metadata.Annotations != nil &&
-		machine.Metadata.Annotations.Get("gmc.io/ignore") == "true" {
+		machine.Metadata.Annotations.Get("gmc.io/ignore") == "true" &&
+		!a.config.Ignore {
 
 		a.config.Ignore = true
-		return config.ToFile(a.configFile, a.config)
-	}
-
-	if msg.Source == protocol.ManualSource && a.config.Ignore {
-		a.config.Ignore = false
-		err := config.ToFile(a.configFile, a.config)
+		err = config.ToFile(a.configFile, a.config)
 		if err != nil {
 			return err
+		}
+
+		recon := reconciliation.NewMachineReconciler(a.commander)
+		return recon.Reconcile(machine)
+	} else {
+		if msg.Source == protocol.ManualSource && a.config.Ignore {
+			a.config.Ignore = false
+			err := config.ToFile(a.configFile, a.config)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

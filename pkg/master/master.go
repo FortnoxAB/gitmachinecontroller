@@ -340,11 +340,7 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 
 	case "run-command-request":
 		if admin, _ := sess.Get("admin"); !admin.(bool) {
-			err := sendIsLast(sess, r.Request.RequestID)
-			if err != nil {
-				logrus.Error(err)
-			}
-
+			sendIsLast(sess, r.Request.RequestID)
 			return fmt.Errorf("run-command-request permission denied")
 		}
 		cmdReq := &protocol.RunCommandRequest{}
@@ -445,24 +441,26 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		if err != nil {
 			return err
 		}
-		logrus.Info("sending update")
+		logrus.Info("sending admin-apply-spec from master")
 		machineUpdateCh <- machineUpdate{Machine: machine, Source: protocol.ManualSource}
-		logrus.Info("sending update done")
 	}
 	return nil
 }
 
-func sendIsLast(sess *melody.Session, reqID string) error {
+func sendIsLast(sess *melody.Session, reqID string) {
 	msg := &protocol.WebsocketMessage{
 		Type:      "last_message",
 		RequestID: reqID,
 	}
 	b, err := msg.Encode()
 	if err != nil {
-		return err
+		logrus.Errorf("sendIsLast error: %s", err)
 	}
 
-	return sess.Write(b)
+	err = sess.Write(b)
+	if err != nil {
+		logrus.Errorf("sendIsLast error: %s", err)
+	}
 }
 
 type Cloner interface {

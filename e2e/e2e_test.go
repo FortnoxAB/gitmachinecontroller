@@ -69,24 +69,7 @@ spec:
     path: /tmp/testfromurl
     url: %s
   - content: |
-      [Unit]
-      Description=Mimir Service
-      After=network.target
-
-      [Service]
-      Type=simple
-      User=root
-      Group=root
-      ExecStart=/usr/local/sbin/mimir -config.file=/etc/mimir.yml
-      SuccessExitStatus=0
-      TimeoutSec=30
-      SyslogIdentifier=mimir
-      Restart=on-failure
-      RestartSec=3
-      LimitNOFILE=1048576
-
-      [Install]
-      WantedBy=multi-user.target
+      filecontentishere
     path: /tmp/test.systemd
     systemd:
       action: restart
@@ -131,6 +114,10 @@ spec:
 	content, err := os.ReadFile("/tmp/testfromurl")
 	assert.NoError(t, err)
 	assert.EqualValues(t, "the file content", content)
+
+	content, err = os.ReadFile("/tmp/test.systemd")
+	assert.NoError(t, err)
+	assert.EqualValues(t, "filecontentishere\n", content)
 
 	cancel()
 	c.wg.Wait()
@@ -263,6 +250,120 @@ spec:
 	assert.NoError(t, err)
 
 	assert.Contains(t, buf.String(), "run-command-request permission denied")
+
+	cancel()
+	c.wg.Wait()
+}
+func TestCliApply(t *testing.T) {
+	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  files:
+  - content: |
+      itsfromgit
+    path: newfile.txt
+  ip: 127.0.0.1
+  lines: []`
+
+	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./gitrepo/mycooltestagent.yml")
+	defer os.Remove("./newfile.txt")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c, closer := initMasterAgent(t, ctx)
+	defer closer()
+
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
+	assert.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
+		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
+		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./adminConfig")
+
+	var content string
+	WaitFor(t, 1*time.Second, "file to have content from git", func() bool {
+		content, err = getFileContent("./newfile.txt")
+		return err == nil
+	})
+	assert.EqualValues(t, "itsfromgit\n", content)
+
+	applyMachineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+    gmc.io/ignore: "true"
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  ip: 127.0.0.1
+  files:
+  - content: |
+      filecontentishere
+    path: newfile.txt
+  lines: []`
+
+	err = os.WriteFile("./newspec.yml", []byte(applyMachineYaml), 0666)
+	assert.NoError(t, err)
+	defer os.Remove("./newspec.yml")
+
+	stdout := captureStdout()
+
+	a := admin.NewAdmin("./adminConfig", "", "")
+	err = a.Apply(ctx, []string{"newspec.yml"})
+	assert.NoError(t, err)
+
+	out := stdout()
+	assert.Contains(t, out, "apply file:  newspec.yml")
+
+	WaitFor(t, 1*time.Second, "file to have content from apply", func() bool {
+		content, err = getFileContent("./newfile.txt")
+		assert.NoError(t, err)
+		return content == "filecontentishere\n"
+	})
+	assert.EqualValues(t, "filecontentishere\n", content)
+
+	applyMachineYaml = `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  ip: 127.0.0.1
+  files:
+  - content: |
+      filecontentishere
+    path: newfile.txt
+  lines: []`
+
+	err = os.WriteFile("./newspec.yml", []byte(applyMachineYaml), 0666)
+	assert.NoError(t, err)
+
+	err = a.Apply(ctx, []string{"newspec.yml"})
+	assert.NoError(t, err)
+
+	WaitFor(t, 1*time.Second, "file to have content from git again", func() bool {
+		content, err = getFileContent("./newfile.txt")
+		assert.NoError(t, err)
+		return content == "itsfromgit\n"
+	})
+	assert.EqualValues(t, "itsfromgit\n", content)
 
 	cancel()
 	c.wg.Wait()

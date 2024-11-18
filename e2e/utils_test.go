@@ -110,22 +110,48 @@ func captureStdout() func() string {
 		return <-outC
 	}
 }
-func captureStderr() func() string {
-	old := os.Stderr // keep backup of the real stdout
-	r, w, _ := os.Pipe()
-	os.Stderr = w
 
-	outC := make(chan string)
-	// copy the output in a separate goroutine so printing can't block indefinitely
-	go func() {
-		var buf bytes.Buffer
-		io.Copy(&buf, r)
-		outC <- buf.String()
-	}()
+/*
+	func captureStderr() func() string {
+		old := os.Stderr // keep backup of the real stdout
+		r, w, _ := os.Pipe()
+		os.Stderr = w
 
-	return func() string {
-		w.Close()
-		os.Stderr = old // restoring the real stdout
-		return <-outC
+		outC := make(chan string)
+		// copy the output in a separate goroutine so printing can't block indefinitely
+		go func() {
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			outC <- buf.String()
+		}()
+
+		return func() string {
+			w.Close()
+			os.Stderr = old // restoring the real stdout
+			return <-outC
+		}
 	}
+*/
+func WaitFor(t *testing.T, timeout time.Duration, msg string, ok func() bool) {
+	end := time.Now().Add(timeout)
+	for {
+		if end.Before(time.Now()) {
+			t.Errorf("timeout waiting for: %s", msg)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+		if ok() {
+			return
+		}
+	}
+}
+
+func getFileContent(fn string) (string, error) {
+
+	content, err := os.ReadFile(fn)
+	if err != nil {
+		return "", err
+	}
+
+	return string(content), nil
 }
