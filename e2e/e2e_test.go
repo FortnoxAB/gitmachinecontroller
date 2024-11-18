@@ -19,8 +19,7 @@ func TestMasterAgentAccept(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	c, closer := initMasterAgent(t, ctx)
-	defer closer()
+	c := initMasterAgent(t, ctx)
 
 	resp, err := c.client.Get("/machines")
 	assert.NoError(t, err)
@@ -50,6 +49,11 @@ func TestMasterAgentAccept(t *testing.T) {
 	c.wg.Wait()
 }
 func TestMasterAgentGitOps(t *testing.T) {
+	t.Cleanup(func() {
+		os.Remove("./gitrepo/mycooltestagent.yml")
+		os.Remove("/tmp/test.systemd")
+		os.Remove("/tmp/testfromurl")
+	})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "the file content")
 	}))
@@ -85,14 +89,10 @@ spec:
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./gitrepo/mycooltestagent.yml")
-	defer os.Remove("/tmp/test.systemd")
-	defer os.Remove("/tmp/testfromurl")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	c, closer := initMasterAgent(t, ctx)
-	defer closer()
+	c := initMasterAgent(t, ctx)
 
 	c.commander.Mock.On("Run", "systemctl restart exporter_exporter").Return("", "", nil).Once()
 	c.commander.Mock.On("Run", "systemctl daemon reload").Return("", "", nil).Once()
@@ -124,6 +124,11 @@ spec:
 }
 
 func TestCliCommand(t *testing.T) {
+	os.Setenv("NO_COLOR", "true")
+	t.Cleanup(func() {
+		os.Remove("./gitrepo/mycooltestagent.yml")
+		os.Remove("./adminConfig")
+	})
 	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
 metadata:
   annotations:
@@ -138,12 +143,10 @@ spec:
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./gitrepo/mycooltestagent.yml")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	c, closer := initMasterAgent(t, ctx)
-	defer closer()
+	c := initMasterAgent(t, ctx)
 
 	c.commander.Mock.On("RunWithCode", "uptime").Return(" 14:43:12 up 56 days, 23:56,  1 user,  load average: 0,71, 0,58, 0,46", "", 0, nil).Once()
 
@@ -156,7 +159,6 @@ spec:
 		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
 		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./adminConfig")
 
 	stdout := captureStdout()
 
@@ -173,6 +175,10 @@ spec:
 }
 
 func TestCliCommandInvalidToken(t *testing.T) {
+	t.Cleanup(func() {
+		os.Remove("./gitrepo/mycooltestagent.yml")
+		os.Remove("./adminConfig")
+	})
 	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
 metadata:
   annotations:
@@ -187,12 +193,10 @@ spec:
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./gitrepo/mycooltestagent.yml")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	c, closer := initMasterAgent(t, ctx)
-	defer closer()
+	c := initMasterAgent(t, ctx)
 
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
@@ -203,7 +207,6 @@ spec:
 		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
 		"token":"%s"}`, c.master.WsPort, "blaha")), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./adminConfig")
 
 	buf := &bytes.Buffer{}
 	logrus.SetOutput(buf)
@@ -217,6 +220,9 @@ spec:
 }
 
 func TestCliCommandNotAdminToken(t *testing.T) {
+	t.Cleanup(func() {
+		os.Remove("./gitrepo/mycooltestagent.yml")
+	})
 	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
 metadata:
   annotations:
@@ -231,12 +237,10 @@ spec:
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./gitrepo/mycooltestagent.yml")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	c, closer := initMasterAgent(t, ctx)
-	defer closer()
+	c := initMasterAgent(t, ctx)
 
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
@@ -255,6 +259,12 @@ spec:
 	c.wg.Wait()
 }
 func TestCliApply(t *testing.T) {
+	t.Cleanup(func() {
+		os.Remove("./gitrepo/mycooltestagent.yml")
+		os.Remove("./newfile.txt")
+		os.Remove("./adminConfig")
+		os.Remove("./newspec.yml")
+	})
 	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
 metadata:
   annotations:
@@ -273,13 +283,10 @@ spec:
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./gitrepo/mycooltestagent.yml")
-	defer os.Remove("./newfile.txt")
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	c, closer := initMasterAgent(t, ctx)
-	defer closer()
+	c := initMasterAgent(t, ctx)
 
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
@@ -290,11 +297,10 @@ spec:
 		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
 		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./adminConfig")
 
-	var content string
+	var content []byte
 	WaitFor(t, 1*time.Second, "file to have content from git", func() bool {
-		content, err = getFileContent("./newfile.txt")
+		content, err = os.ReadFile("./newfile.txt")
 		return err == nil
 	})
 	assert.EqualValues(t, "itsfromgit\n", content)
@@ -318,7 +324,6 @@ spec:
 
 	err = os.WriteFile("./newspec.yml", []byte(applyMachineYaml), 0666)
 	assert.NoError(t, err)
-	defer os.Remove("./newspec.yml")
 
 	stdout := captureStdout()
 
@@ -330,10 +335,16 @@ spec:
 	assert.Contains(t, out, "apply file:  newspec.yml")
 
 	WaitFor(t, 1*time.Second, "file to have content from apply", func() bool {
-		content, err = getFileContent("./newfile.txt")
+		content, err = os.ReadFile("./newfile.txt")
 		assert.NoError(t, err)
-		return content == "filecontentishere\n"
+		return string(content) == "filecontentishere\n"
 	})
+	assert.EqualValues(t, "filecontentishere\n", content)
+
+	//sleep here and see that git doesnt overwrite it
+	time.Sleep(2 * time.Second)
+	content, err = os.ReadFile("./newfile.txt")
+	assert.NoError(t, err)
 	assert.EqualValues(t, "filecontentishere\n", content)
 
 	applyMachineYaml = `apiVersion: gitmachinecontroller.io/v1beta1
@@ -359,9 +370,9 @@ spec:
 	assert.NoError(t, err)
 
 	WaitFor(t, 1*time.Second, "file to have content from git again", func() bool {
-		content, err = getFileContent("./newfile.txt")
+		content, err = os.ReadFile("./newfile.txt")
 		assert.NoError(t, err)
-		return content == "itsfromgit\n"
+		return string(content) == "itsfromgit\n"
 	})
 	assert.EqualValues(t, "itsfromgit\n", content)
 

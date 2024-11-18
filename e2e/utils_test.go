@@ -27,7 +27,7 @@ type testWrapper struct {
 	wg        *sync.WaitGroup
 }
 
-func initMasterAgent(t *testing.T, ctx context.Context) (testWrapper, func()) {
+func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 
 	logrus.SetLevel(logrus.DebugLevel)
 	port, err := freePort()
@@ -68,15 +68,17 @@ func initMasterAgent(t *testing.T, ctx context.Context) (testWrapper, func()) {
 
 	time.Sleep(400 * time.Millisecond)
 	client := NewAuthedHttpClient(t, "http://localhost:"+portStr)
+
+	t.Cleanup(func() {
+		os.Remove("./agentConfig")
+	})
 	return testWrapper{
-			client:    client,
-			master:    master,
-			agent:     agent,
-			commander: mockedCommander,
-			wg:        wg,
-		}, func() {
-			os.Remove("./agentConfig")
-		}
+		client:    client,
+		master:    master,
+		agent:     agent,
+		commander: mockedCommander,
+		wg:        wg,
+	}
 }
 func freePort() (port int, err error) {
 	var a *net.TCPAddr
@@ -144,14 +146,4 @@ func WaitFor(t *testing.T, timeout time.Duration, msg string, ok func() bool) {
 			return
 		}
 	}
-}
-
-func getFileContent(fn string) (string, error) {
-
-	content, err := os.ReadFile(fn)
-	if err != nil {
-		return "", err
-	}
-
-	return string(content), nil
 }
