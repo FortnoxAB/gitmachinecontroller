@@ -28,7 +28,7 @@ type Claims struct {
 	AllowedIP string `json:"allowedIp"`
 	// Admin is allowed to do apply and exec commands
 	Admin bool `json:"admin"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 func (j *JWTHandler) ValidateToken(signedToken string) (*Claims, error) {
@@ -36,6 +36,9 @@ func (j *JWTHandler) ValidateToken(signedToken string) (*Claims, error) {
 		signedToken,
 		&Claims{},
 		func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
 			return []byte(j.key), nil
 		},
 	)
@@ -50,9 +53,6 @@ func (j *JWTHandler) ValidateToken(signedToken string) (*Claims, error) {
 	claims, ok := token.Claims.(*Claims)
 	if !ok {
 		return nil, fmt.Errorf("couldn't parse claims: ")
-	}
-	if claims.ExpiresAt < time.Now().Local().Unix() {
-		return nil, fmt.Errorf("token expired")
 	}
 
 	return claims, nil
@@ -85,8 +85,8 @@ func DefaultClaims(opts ...OptionsFunc) *Claims {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claim := &Claims{
 		Allowed: true,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: expirationTime.Unix(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
 		},
 	}
 

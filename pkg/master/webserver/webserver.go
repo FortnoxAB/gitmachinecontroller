@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/jwt"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/secrets"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	"github.com/jonaz/ginlogrus"
@@ -29,16 +31,18 @@ type Webserver struct {
 	jwt            *jwt.JWTHandler
 	MachineStateCh chan types.MachineStateQuestion
 	EnableMetrics  bool
+	secretHandler  *secrets.Handler
 }
 
-func New(port, jwtKey string, masters config.Masters) *Webserver {
+func New(port, jwtKey string, masters config.Masters, secretHandler *secrets.Handler) *Webserver {
 	m := melody.New()
 	m.Config.MaxMessageSize = 32 << 20 // 32MB
 	return &Webserver{
-		Port:      port,
-		Masters:   masters,
-		Websocket: m,
-		jwt:       jwt.New(jwtKey),
+		Port:          port,
+		Masters:       masters,
+		Websocket:     m,
+		jwt:           jwt.New(jwtKey),
+		secretHandler: secretHandler,
 	}
 }
 
@@ -65,6 +69,7 @@ func (ws *Webserver) Init() *gin.Engine {
 	requireAdmin := router.Group("/")
 	requireAdmin.Use(ws.jwt.Middleware())
 	requireAdmin.POST("/api/machines/accept-v1", err(ws.approveMachine))
+	requireAdmin.POST("/api/secret-encrypt-v1", err(ws.secretEncrypt))
 	requireAdmin.GET("/api/authed-v1", func(*gin.Context) {})
 	requireAdmin.GET("/machines", err(ws.listPendingMachines))
 	requireAdmin.GET("/api/machines-v1", err(func(c *gin.Context) error {
@@ -82,6 +87,22 @@ func (ws *Webserver) Init() *gin.Engine {
 
 	pprof.Register(router)
 	return router
+}
+func (ws *Webserver) secretEncrypt(c *gin.Context) error {
+
+	b, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return err
+	}
+
+	defer c.Request.Body.Close()
+	secret, err := ws.secretHandler.Encrypt(b)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.Writer.Write(secret)
+	return err
 }
 
 // func (ws *Webserver) OnWsMsg(fn func(*melody.Session, []byte)) {
@@ -105,6 +126,7 @@ func (ws *Webserver) createAdmin(c *gin.Context) error {
 		isAdmin = claims.Admin
 	}
 
+	// TODO should we trust some upstream LB for IP?
 	isProxy := c.Request.Header.Get("x-forwarded-for") != ""
 	ip := net.ParseIP(ipStr)
 	if (!ip.IsLoopback() && !isAdmin) || isProxy {
@@ -258,7 +280,6 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 		keys["allowed"] = false
 		keys["admin"] = false
 		keys["ip"] = c.ClientIP()
-		keys["allowedIP"] = ""
 
 		tokenString := c.Request.Header.Get("Authorization")
 		if tokenString == "" {
@@ -266,16 +287,20 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 			if hostname == "" {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 					"error": "missing x-hostname header"})
+				return
 			}
 			keys["host"] = hostname
 		} else {
 			claims, err := ws.jwt.ValidateToken(tokenString)
 			if err != nil {
-				c.AbortWithError(http.StatusUnauthorized, err)
+				logrus.Errorf("master: error validating jwt: %s", err)
+				c.AbortWithStatus(http.StatusUnauthorized)
 				return
 			}
 			if keys["ip"] != claims.AllowedIP && !claims.Admin { // Only allow agent to connect from the IP in their JWT
-				c.AbortWithError(http.StatusUnauthorized, fmt.Errorf("connection from %s forbidden, allowed: %s", keys["ip"], claims.AllowedIP))
+				err = fmt.Errorf("connection from %s forbidden, allowed: %s", keys["ip"], claims.AllowedIP)
+				logrus.Errorf("master: error validating jwt: %s", err)
+				c.AbortWithError(http.StatusUnauthorized, err)
 				return
 			}
 			keys["admin"] = claims.Admin
@@ -283,7 +308,10 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 			keys["allowed"] = claims.Allowed
 		}
 
-		ws.Websocket.HandleRequestWithKeys(c.Writer, c.Request, keys)
+		err := ws.Websocket.HandleRequestWithKeys(c.Writer, c.Request, keys)
+		if err != nil {
+			logrus.Errorf("master: error handling websocket: %s", err)
+		}
 	})
 }
 func (ws *Webserver) Start(ctx context.Context) {
@@ -361,5 +389,3 @@ func err(f func(c *gin.Context) error) gin.HandlerFunc {
 		}
 	}
 }
-
-// var jwtKey = []byte("supersecretkey")
