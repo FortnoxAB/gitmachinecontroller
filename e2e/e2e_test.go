@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/fortnoxab/gitmachinecontroller/pkg/admin"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/secrets"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
@@ -214,7 +217,7 @@ spec:
 	err = a.Exec(context.TODO(), "uptime")
 	assert.Equal(t, "websocket: bad handshake", err.Error())
 
-	assert.Contains(t, buf.String(), "Error #01: auth: error validating")
+	assert.Contains(t, buf.String(), "http_request_status=401")
 	cancel()
 	c.wg.Wait()
 }
@@ -376,6 +379,33 @@ spec:
 	})
 	assert.EqualValues(t, "itsfromgit\n", content)
 
+	cancel()
+	c.wg.Wait()
+}
+
+func TestMasterEncryptString(t *testing.T) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c := initMasterAgent(t, ctx)
+
+	resp, err := c.client.Post("/api/secret-encrypt-v1", bytes.NewBufferString(`mysecretstring`))
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+
+	b, err := io.ReadAll(resp.Body)
+	assert.NoError(t, err)
+
+	sh := secrets.NewHandler("asdfasdf")
+	files := types.Files{
+		{
+			Content: fmt.Sprintf(`my cool test file content with {{secret "%s"}}`, string(b)),
+		},
+	}
+	err = sh.DecryptFilesContent(files)
+	assert.NoError(t, err)
+
+	assert.Equal(t, "my cool test file content with mysecretstring", files[0].Content)
 	cancel()
 	c.wg.Wait()
 }

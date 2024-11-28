@@ -38,6 +38,7 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 		GitPollInterval: time.Second,
 		WsPort:          portStr,
 		JWTKey:          "asdfasdf",
+		SecretKey:       "asdfasdf",
 		Masters: config.Masters{
 			{
 				URL:  "http://localhost:" + portStr,

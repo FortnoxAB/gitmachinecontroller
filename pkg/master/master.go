@@ -19,6 +19,7 @@ import (
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/webserver"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/secrets"
 	"github.com/olahol/melody"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
@@ -82,6 +83,7 @@ type Master struct {
 	EnableMetrics     bool
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
+	secretHandler     *secrets.Handler
 }
 
 func NewMasterFromContext(c *cli.Context) *Master {
@@ -116,13 +118,11 @@ func NewMasterFromContext(c *cli.Context) *Master {
 	return m
 }
 
-// testrun with
-// gmc master --git-path "jsonnet/vms/manifests/main" --git-url "ssh://git@git.fnox.se:7999/fo/infra.git" --git-branch "feature/gitmachine" --git-identity-path /home/jonaz/.ssh/id_rsa --git-known-hosts-path /home/jonaz/.ssh/known_hosts --git-identity-passphrase asdfasdf
-
 func (m *Master) Run(ctx context.Context) error {
 	logrus.SetFormatter(&logrus.TextFormatter{TimestampFormat: time.RFC3339Nano, FullTimestamp: true})
 	m.machineStateCh = make(chan types.MachineStateQuestion)
-	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters)
+	m.secretHandler = secrets.NewHandler(m.SecretKey)
+	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters, m.secretHandler)
 	m.webserver.MachineStateCh = m.machineStateCh
 	m.webserver.EnableMetrics = m.EnableMetrics
 	go m.webserver.Start(ctx)
@@ -155,7 +155,7 @@ func (m *Master) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cloneOpts := repository.CloneOptions{
+	cloneOpts := repository.CloneConfig{
 		ShallowClone: true,
 	}
 	cloneOpts.Branch = m.GitBranch
@@ -171,7 +171,11 @@ func (m *Master) run(ctx context.Context) error {
 			select {
 			case update := <-machineUpdateCh:
 				syncCh <- update.Machine
-				// TODO template most string values to support secrets?
+				err = m.secretHandler.DecryptFilesContent(update.Machine.Spec.Files)
+				if err != nil {
+					logrus.Error(err)
+					continue
+				}
 				msg, err := protocol.NewMachineUpdate(update.Source, update.Machine)
 				if err != nil {
 					logrus.Error(err)
@@ -464,7 +468,7 @@ func sendIsLast(sess *melody.Session, reqID string) {
 }
 
 type Cloner interface {
-	Clone(ctx context.Context, url string, cloneOpts repository.CloneOptions) (*git.Commit, error)
+	Clone(ctx context.Context, url string, cloneOpts repository.CloneConfig) (*git.Commit, error)
 	Close()
 }
 
@@ -472,7 +476,7 @@ type testCloner struct {
 	dir string
 }
 
-func (tc *testCloner) Clone(ctx context.Context, URL string, cloneOpts repository.CloneOptions) (*git.Commit, error) {
+func (tc *testCloner) Clone(ctx context.Context, URL string, cloneOpts repository.CloneConfig) (*git.Commit, error) {
 
 	u, err := url.Parse(URL)
 	if err != nil {
@@ -492,7 +496,7 @@ func (tc *testCloner) Close() {
 
 }
 
-func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneOptions, manifestCh chan machineUpdate) error {
+func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneConfig, manifestCh chan machineUpdate) error {
 	dir, err := os.MkdirTemp("", "gmc")
 	if err != nil {
 		return err
@@ -566,54 +570,3 @@ func (m *Master) identity() (map[string][]byte, error) {
 
 	return authData, nil
 }
-
-/*
-
-// TODO implement encrypted strings
-func (m *Master) encryptSecret(plaintext []byte) (string, error) {
-	key := sha256.Sum256([]byte(m.SecretKey))
-
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		panic(err.Error())
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		panic(err.Error())
-	}
-	// Never use more than 2^32 random nonces with a given key because of the risk of a repeat.
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		panic(err.Error())
-	}
-
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
-	return string(ciphertext), nil
-}
-
-func (m *Master) decryptSecret(ciphertext []byte) (string, error) {
-	key := sha256.Sum256([]byte(m.SecretKey))
-
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	plaintext, err := gcm.Open(nil,
-		ciphertext[:gcm.NonceSize()],
-		ciphertext[gcm.NonceSize():],
-		nil,
-	)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
-}
-*/
