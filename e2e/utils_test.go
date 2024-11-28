@@ -25,6 +25,7 @@ type testWrapper struct {
 	agent     *agent.Agent
 	commander *mocks.MockCommander
 	wg        *sync.WaitGroup
+	redis     *mocks.MockCmdable
 }
 
 func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
@@ -33,12 +34,14 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 	port, err := freePort()
 	assert.NoError(t, err)
 	portStr := strconv.Itoa(port)
+	redisMock := mocks.NewMockCmdable(t)
 	master := &master.Master{
 		GitURL:          "https://test/gitrepo",
 		GitPollInterval: time.Second,
 		WsPort:          portStr,
 		JWTKey:          "asdfasdf",
 		SecretKey:       "asdfasdf",
+		RedisClient:     redisMock,
 		Masters: config.Masters{
 			{
 				URL:  "http://localhost:" + portStr,
@@ -79,6 +82,7 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 		agent:     agent,
 		commander: mockedCommander,
 		wg:        wg,
+		redis:     redisMock,
 	}
 }
 func freePort() (port int, err error) {

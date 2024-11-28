@@ -3,11 +3,14 @@ package websocket
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
@@ -21,8 +24,6 @@ const (
 
 	// Send pings to peer with this period. Must be less than pongWait.
 	pingPeriod = (pongWait * 9) / 10
-
-	reconnectWait = 2 * time.Second
 )
 
 // Websocket implements a websocket client.
@@ -37,6 +38,7 @@ type Websocket interface {
 	WriteJSON(v interface{}) error
 	WriteMessage(messageType int, data []byte) error
 	SetTLSConfig(c *tls.Config)
+	WriteAndWait(msg *protocol.WebsocketMessage) (*protocol.WebsocketMessage, error)
 }
 type writeCh struct {
 	body  interface{}
@@ -55,6 +57,8 @@ type websocketClient struct {
 	disconnected    chan error
 	connected       chan struct{}
 	onConnect       func()
+	list            map[string]chan []byte
+	listMutex       sync.RWMutex
 	sync.RWMutex
 }
 
@@ -67,6 +71,7 @@ func NewWebsocketClient() Websocket {
 		wg:           &sync.WaitGroup{},
 		disconnected: make(chan error),
 		connected:    make(chan struct{}),
+		list:         make(map[string]chan []byte),
 	}
 }
 
@@ -155,9 +160,58 @@ func (ws *websocketClient) WriteJSON(v interface{}) error {
 	}
 	return <-errCh
 }
+func (ws *websocketClient) WriteAndWait(msg *protocol.WebsocketMessage) (*protocol.WebsocketMessage, error) {
+
+	msg.RequestID = uuid.New().String()
+
+	waitCh := ws.WaitForResponse(msg.RequestID)
+	errCh := make(chan error)
+	delay := time.NewTimer(time.Millisecond * 10)
+	select {
+	case ws.writeJSON <- writeCh{errCh: errCh, body: msg}:
+		if !delay.Stop() {
+			<-delay.C
+		}
+	case <-delay.C:
+		errCh <- fmt.Errorf("websocket: no one listening on write channel")
+	}
+	err := <-errCh
+	if err != nil {
+		return nil, err
+	}
+
+	rawJson := <-waitCh
+
+	return protocol.ParseMessage(rawJson)
+}
+
+func (ws *websocketClient) WaitForResponse(reqID string) chan []byte {
+	if ch := ws.Ch(reqID); ch != nil {
+		return ch
+	}
+	ch := make(chan []byte)
+	ws.listMutex.Lock()
+	ws.list[reqID] = ch
+	ws.listMutex.Unlock()
+	return ch
+}
+func (ws *websocketClient) Ch(reqID string) chan []byte {
+	ws.listMutex.RLock()
+	defer ws.listMutex.RUnlock()
+	return ws.list[reqID]
+}
+func (ws *websocketClient) Done(reqID string) {
+	ws.listMutex.Lock()
+	delete(ws.list, reqID)
+	ws.listMutex.Unlock()
+}
 
 func (ws *websocketClient) readPump(conn *websocket.Conn) {
 	ws.wg.Add(1)
+	type msgWithId struct {
+		RequestID string `json:"requestId"`
+	}
+
 	go func() {
 		defer ws.wg.Done()
 		conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -169,6 +223,20 @@ func (ws *websocketClient) readPump(conn *websocket.Conn) {
 				return
 			}
 			logrus.Debugf("websocket: readPump got msg: %s", message)
+
+			id := &msgWithId{}
+			err = json.Unmarshal(message, id)
+			if err != nil {
+				logrus.Errorf("error parsing RequestID from message: %s", err)
+				continue
+			}
+
+			if ch := ws.Ch(id.RequestID); ch != nil {
+				ch <- message
+				ws.Done(id.RequestID)
+				continue
+			}
+
 			select {
 			case ws.read <- message:
 			default:

@@ -155,6 +155,10 @@ func app() *cli.App {
 					Value: "8080",
 					Usage: "webserver port to listen to",
 				},
+				&cli.StringFlag{
+					Name:  "redis-url",
+					Usage: "redis url, ex redis://[[username]:[password]]@localhost:6379/0 or rediss://[[username]:[password]]@localhost:6379/0 for tls/ssl connections",
+				},
 			},
 		},
 		{
@@ -281,7 +285,7 @@ func app() *cli.App {
 				{
 					Name:   "zsh",
 					Usage:  "put in .zshrc: 'source <(" + os.Args[0] + " completion zsh)'",
-					Action: bashCompletion,
+					Action: zshCompletion,
 				},
 			},
 		},
@@ -330,7 +334,7 @@ _cli_bash_autocomplete() {
 
 complete -o bashdefault -o default -o nospace -F _cli_bash_autocomplete %s
 `, binaryName)
-	fmt.Printf(script)
+	fmt.Print(script)
 	// fmt.Println(os.Args)
 	return nil
 }
@@ -358,7 +362,7 @@ _cli_zsh_autocomplete() {
 
 compdef _cli_zsh_autocomplete %s
 `, binaryName)
-	fmt.Printf(script)
+	fmt.Print(script)
 	// fmt.Println(os.Args)
 	return nil
 }

@@ -7,14 +7,16 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (mr *MachineReconciler) commands(commands types.Commands) error {
+func (mr *MachineReconciler) commands(commands types.Commands) {
 	for _, cmd := range commands {
 		// command.Command
 		// command.Check
 
-		_, _, err := mr.commander.Run(cmd.Check) // dont run command if check did not exit 0
-		if err != nil {
-			continue
+		if cmd.Check != "" {
+			_, _, err := mr.commander.Run(cmd.Check) // dont run command if check did not exit 0
+			if err != nil {
+				continue
+			}
 		}
 
 		// TODO report errors back to master or with local metrics?
@@ -26,5 +28,4 @@ func (mr *MachineReconciler) commands(commands types.Commands) error {
 		fmt.Println("stdout", stdOut)
 		fmt.Println("stderr", stdErr)
 	}
-	return nil
 }

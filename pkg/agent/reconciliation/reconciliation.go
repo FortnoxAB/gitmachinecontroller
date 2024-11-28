@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/command"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -12,34 +14,57 @@ type MachineReconciler struct {
 	restartUnits       map[string]string
 	daemonReloadNeeded bool
 	commander          command.Commander
+	wsClient           websocket.Websocket
 }
 
-func NewMachineReconciler(c command.Commander) *MachineReconciler {
-	return &MachineReconciler{commander: c}
+func NewMachineReconciler(c command.Commander, wsClient websocket.Websocket) *MachineReconciler {
+	return &MachineReconciler{
+		commander: c,
+		wsClient:  wsClient,
+	}
 }
 
 func (mr *MachineReconciler) Reconcile(machine *types.Machine) error {
 	mr.restartUnits = make(map[string]string) // map[unit]action
 
-	err := mr.commands(machine.Spec.Commands)
-	if err != nil {
-		return err
+	for _, task := range machine.Spec.Tasks {
+		clear(mr.restartUnits) // reset on each task run
+
+		if task.Lock != nil {
+			msg, _ := protocol.NewMessage("agent-aqure-lock", task.Lock)
+			response, err := mr.wsClient.WriteAndWait(msg)
+			if err != nil {
+				logrus.Errorf("error aquire lock: %s", err)
+				continue
+			}
+
+			if response.Type != "agent-aqured-lock" {
+				logrus.Info("failed to aquire lock: ", task.Lock.Key)
+				continue
+			}
+		}
+
+		mr.commands(task.Commands)
+		mr.files(task.Files)
+		mr.lines(task.Lines)
+		mr.packages(task.Packages)
+
+		err := mr.runSystemdTriggers()
+		if err != nil {
+			logrus.Errorf("error running systemd: %s", err)
+		}
+		if task.Lock != nil {
+			msg, _ := protocol.NewMessage("agent-release-lock", task.Lock)
+			err := mr.wsClient.WriteJSON(msg)
+			if err != nil {
+				logrus.Errorf("error aquire lock: %s", err)
+				continue
+			}
+			// no need to wait for response here
+		}
 	}
 
-	err = mr.files(machine.Spec.Files)
-	if err != nil {
-		return err
-	}
-	err = mr.lines(machine.Spec.Lines)
-	if err != nil {
-		return err
-	}
-	err = mr.packages(machine.Spec.Packages)
-	if err != nil {
-		return err
-	}
-
-	return mr.runSystemdTriggers()
+	return nil
 }
 
 func (mr *MachineReconciler) unitNeedsTrigger(systemd *types.SystemdReference) {
