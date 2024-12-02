@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (mr *MachineReconciler) lines(lines types.Lines) error {
+func (mr *MachineReconciler) lines(lines types.Lines) {
 	for _, line := range lines {
 		err := applyLine(line)
 		if err != nil {
@@ -19,7 +19,6 @@ func (mr *MachineReconciler) lines(lines types.Lines) error {
 			continue
 		}
 	}
-	return nil
 }
 
 func applyLine(line *types.Line) error {

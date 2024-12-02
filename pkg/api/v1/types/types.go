@@ -54,26 +54,38 @@ func (l Labels) Get(label string) (value string) {
 }
 
 type Spec struct {
-	Commands  Commands  `json:"commands"`
-	Files     Files     `json:"files"`
+	Tasks     Tasks
 	IP        string    `json:"ip"`
-	Lines     Lines     `json:"lines"`
-	Packages  Packages  `json:"packages"`
 	Provision Provision `json:"provision"`
 }
+
+type Task struct {
+	Name string `json:"name"`
+	// Depends on other task to happen before
+	Depends string `json:"depends"`
+
+	Commands Commands `json:"commands,omitempty"`
+	Files    Files    `json:"files,omitempty"`
+	Lines    Lines    `json:"lines,omitempty"`
+	Packages Packages `json:"packages,omitempty"`
+
+	Lock *Lock `json:"lock,omitempty"`
+}
+type Tasks []*Task
 
 type Packages []*Package
 
 type Package struct {
-	Name string
+	Name string `json:"name"`
 
 	// Version where "*" means latest
-	Version string
+	Version string `json:"version"`
 }
 
 type Command struct {
 	Command string `json:"command"`
 	Check   string `json:"check"`
+	//TODO add Shell to specify in what shell to run?
 }
 type Commands []*Command
 
@@ -117,6 +129,12 @@ type Provision struct {
 	Memory int `json:"memory"`
 	// TODO disks etc..
 	// Type   string `json:"type"` // dont need this unless we have multiple Provision providers. but we could use label selectors instead?
+}
+
+type Lock struct {
+	Key         string        `json:"key"`
+	GracePeriod time.Duration `json:"gracePeriod"`
+	TTL         time.Duration `json:"ttl"`
 }
 
 // MachineState is used internall in master to keep track of current state.

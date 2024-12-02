@@ -14,14 +14,18 @@ func TestFilesContent(t *testing.T) {
 
 	machine := &types.Machine{
 		Spec: &types.Spec{
-			Files: types.Files{
-				&types.File{
-					Path:    "testfil1",
-					Content: "test",
-					Systemd: &types.SystemdReference{
-						DaemonReload: true,
-						Name:         "service1",
-						Action:       "restart",
+			Tasks: types.Tasks{
+				{
+					Files: types.Files{
+						&types.File{
+							Path:    "testfil1",
+							Content: "test",
+							Systemd: &types.SystemdReference{
+								DaemonReload: true,
+								Name:         "service1",
+								Action:       "restart",
+							},
+						},
 					},
 				},
 			},
@@ -33,7 +37,7 @@ func TestFilesContent(t *testing.T) {
 	mockedCommander.Mock.On("Run", "systemctl restart service1").Return("", "", nil).Once()
 	mockedCommander.Mock.On("Run", "systemctl daemon reload").Return("", "", nil).Once()
 
-	recon := NewMachineReconciler(mockedCommander)
+	recon := NewMachineReconciler(mockedCommander, nil) //TODO no redis in those tests yet. Its tested in e2e
 	err := recon.Reconcile(machine)
 	assert.NoError(t, err)
 
@@ -86,10 +90,14 @@ func TestInstallPackages(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			machine := &types.Machine{
 				Spec: &types.Spec{
-					Packages: types.Packages{
+					Tasks: types.Tasks{
 						{
-							Name:    tt.packageName,
-							Version: tt.packageVersion,
+							Packages: types.Packages{
+								{
+									Name:    tt.packageName,
+									Version: tt.packageVersion,
+								},
+							},
 						},
 					},
 				},
@@ -104,7 +112,7 @@ func TestInstallPackages(t *testing.T) {
 				mockedCommander.Mock.On("Run", fmt.Sprintf("yum install -y %s", tt.providesIt)).Return("", "", nil).Once()
 			}
 
-			recon := NewMachineReconciler(mockedCommander)
+			recon := NewMachineReconciler(mockedCommander, nil)
 			err := recon.Reconcile(machine)
 			assert.NoError(t, err)
 		})

@@ -21,6 +21,15 @@ func NewHandler(key string) *Handler {
 	return &Handler{key: key}
 }
 
+func (s *Handler) DecryptTasksFilesContent(tasks types.Tasks) error {
+	for _, task := range tasks {
+		err := s.DecryptFilesContent(task.Files)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (s *Handler) DecryptFilesContent(files types.Files) error {
 	for _, file := range files {
 		if file.Content != "" {

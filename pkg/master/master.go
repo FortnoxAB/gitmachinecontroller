@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master/webserver"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/secrets"
 	"github.com/olahol/melody"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 	"gopkg.in/yaml.v3"
@@ -30,6 +30,9 @@ import (
 /*
 TODO
 	Think about HA?
+HA
+* clients connect to prefered master
+* admin command knows all masters
 	* do we want leaderelection so only one syncs from git? Probably!
 	* how to ensure clients fetches from the current leader?
 
@@ -84,9 +87,11 @@ type Master struct {
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
 	secretHandler     *secrets.Handler
+	RedisClient       redis.Cmdable
 }
 
 func NewMasterFromContext(c *cli.Context) *Master {
+
 	m := &Master{
 		GitURL:            c.String("git-url"),
 		GitBranch:         c.String("git-branch"),
@@ -101,15 +106,28 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		WsPort:            c.String("port"),
 		EnableMetrics:     true,
 	}
+	if c.String("redis-url") != "" {
+		opt, err := redis.ParseURL(c.String("redis-url"))
+		if err != nil {
+			logrus.Fatalf("error parsing redis url, err: %s", err)
+			return nil
+		}
+		m.RedisClient = redis.NewClient(opt)
+	}
 
 	masters := config.Masters{}
 	for _, m := range c.StringSlice("master") {
-		tmp := strings.Split(m, ";")
+		u, err := url.Parse(m)
+		if err != nil {
+			logrus.Fatalf("error parsing master url, err: %s", err)
+			return nil
+		}
 
-		fmt.Println(tmp)
-		master := &config.Master{URL: tmp[0]}
-		if len(tmp) > 1 {
-			master.Zone = tmp[1]
+		z := u.Query().Get("zone")
+		u.RawQuery = ""
+		master := &config.Master{
+			URL:  u.String(),
+			Zone: z,
 		}
 		masters = append(masters, master)
 	}
@@ -171,7 +189,7 @@ func (m *Master) run(ctx context.Context) error {
 			select {
 			case update := <-machineUpdateCh:
 				syncCh <- update.Machine
-				err = m.secretHandler.DecryptFilesContent(update.Machine.Spec.Files)
+				err = m.secretHandler.DecryptTasksFilesContent(update.Machine.Spec.Tasks)
 				if err != nil {
 					logrus.Error(err)
 					continue
@@ -353,19 +371,6 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 			return err
 		}
 
-		logrus.Infof("we will run command: %s", cmdReq.Command)
-
-		msg, err := protocol.NewMessage("run-command", cmdReq.Command)
-		if err != nil {
-			return err
-		}
-
-		msg.RequestID = r.Request.RequestID
-		b, err := msg.Encode()
-		if err != nil {
-			return err
-		}
-
 		sendTo, offline, err := m.filterSessions(machines, cmdReq.Regexp, cmdReq.LabelSelector)
 		if err != nil {
 			return err
@@ -375,13 +380,13 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		logrus.Debugf("will send command request to cnt: %d", onlineLen)
 		logrus.Debugf("offline machines: %#v", offline)
 
-		if len(sendTo)+len(offline) == 0 {
+		if onlineLen+len(offline) == 0 {
 			sendIsLast(sess, r.Request.RequestID)
 			return fmt.Errorf("found zero hosts to send command to")
 		}
 
 		for _, host := range offline {
-			b, err := protocol.NewCommandResult(msg.RequestID, &protocol.CommandResult{
+			b, err := protocol.NewCommandResult(r.Request.RequestID, &protocol.CommandResult{
 				Online: false,
 			})
 			if err != nil {
@@ -422,7 +427,18 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 				}
 			}
 		}()
+		logrus.Infof("we will run command: %s", cmdReq.Command)
 
+		msg, err := protocol.NewMessage("run-command", cmdReq.Command)
+		if err != nil {
+			return err
+		}
+
+		msg.RequestID = r.Request.RequestID
+		b, err := msg.Encode()
+		if err != nil {
+			return err
+		}
 		requestResponseStore.WaitForResponse(r.Request.RequestID)
 		err = m.webserver.Websocket.BroadcastMultiple(b, sendTo)
 		if err != nil {
@@ -447,8 +463,82 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		}
 		logrus.Info("sending admin-apply-spec from master")
 		machineUpdateCh <- machineUpdate{Machine: machine, Source: protocol.ManualSource}
+
+	case "agent-aqure-lock":
+		if admin, _ := sess.Get("allowed"); !admin.(bool) {
+			return fmt.Errorf("agent-aqure-lock permission denied")
+		}
+		l := &protocol.AgentLock{}
+		err := json.Unmarshal(r.Request.Body, l)
+		if err != nil {
+			return err
+		}
+
+		hasLock, err := aquireLock(ctx, m.RedisClient, l.Key, r.Request.From, time.Duration(l.TTL))
+		if err != nil {
+			return err
+		}
+
+		response := &protocol.WebsocketMessage{
+			Type:      "agent-aqured-lock",
+			RequestID: r.Request.RequestID,
+		}
+		if !hasLock {
+			response.Type = "agent-failed-lock"
+		}
+
+		b, err := response.Encode()
+		if err != nil {
+			return err
+		}
+
+		err = sess.Write(b)
+		if err != nil {
+			return err
+		}
+	case "agent-release-lock":
+		if admin, _ := sess.Get("allowed"); !admin.(bool) {
+			return fmt.Errorf("agent-release-lock permission denied")
+		}
+		l := &protocol.AgentLock{}
+		err := json.Unmarshal(r.Request.Body, l)
+		if err != nil {
+			return err
+		}
+		err = releaseLock(ctx, m.RedisClient, l.Key)
+		if err != nil {
+			return err
+		}
+
+		err = sess.Write([]byte(`{"hasLock":false}`))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func releaseLock(ctx context.Context, redisClient redis.Cmdable, key string) error {
+	_, err := redisClient.Del(ctx, "gmc.lock"+key).Result()
+	if err == redis.Nil {
+		return err
+	}
+	return err
+}
+func aquireLock(ctx context.Context, redisClient redis.Cmdable, key, id string, ttl time.Duration) (bool, error) {
+	isLeader, err := redisClient.SetNX(ctx, "gmc.lock"+key, id, ttl).Result()
+
+	if err == nil && isLeader {
+		logrus.Debug("aquired new leader lock")
+		return true, nil
+	}
+
+	lockId, err := redisClient.Get(ctx, "gmc.lock"+key).Result()
+	if err != nil {
+		return false, err
+	}
+	logrus.Debugf("current leader is: %s", lockId)
+	return lockId == id, nil
 }
 
 func sendIsLast(sess *melody.Session, reqID string) {
@@ -513,8 +603,9 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 	}
 	defer gitClient.Close()
 
-	// TODO context timeout here.
-	commit, err := gitClient.Clone(ctx, m.GitURL, cloneOpts)
+	ctx1, cancel := context.WithTimeout(ctx, time.Minute*1) // TODO make this configurable?
+	defer cancel()
+	commit, err := gitClient.Clone(ctx1, m.GitURL, cloneOpts)
 	if err != nil {
 		return err
 	}

@@ -14,8 +14,10 @@ import (
 	"github.com/fortnoxab/gitmachinecontroller/pkg/admin"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/secrets"
+	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestMasterAgentAccept(t *testing.T) {
@@ -70,25 +72,27 @@ metadata:
     type: server
   name: mycooltestagent
 spec:
-  commands: []
-  files:
-  - checksum: 9b76e7ea790545334ea524f3ca33db8eb6c4541a9b476911e5abf850a566b41c
-    path: /tmp/testfromurl
-    url: %s
-  - content: |
-      filecontentishere
-    path: /tmp/test.systemd
-    systemd:
-      action: restart
-      name: exporter_exporter
-      daemonreload: true
-  ip: 10.81.22.150
-  lines: []
-  packages:
-  - name: vim-enhanced
-    version: '*'
-  - name: mycoolpackage
-    version: '*'`, ts.URL)
+  tasks:
+    - commands: []
+      files:
+      - checksum: 9b76e7ea790545334ea524f3ca33db8eb6c4541a9b476911e5abf850a566b41c
+        path: /tmp/testfromurl
+        url: %s
+      - content: |
+          filecontentishere
+        path: /tmp/test.systemd
+        systemd:
+          action: restart
+          name: exporter_exporter
+          daemonreload: true
+      ip: 10.81.22.150
+      lines: []
+      packages:
+      - name: vim-enhanced
+        version: '*'
+      - name: mycoolpackage
+        version: '*'
+`, ts.URL)
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
@@ -126,6 +130,70 @@ spec:
 	c.wg.Wait()
 }
 
+func TestMasterAgentGitOpsWithLock(t *testing.T) {
+	t.Cleanup(func() {
+		os.Remove("./gitrepo/mycooltestagent.yml")
+		os.Remove("/tmp/test.systemd")
+		os.Remove("/tmp/testfromurl")
+	})
+	machineYaml := `apiVersion: gitmachinecontroller.io/v1beta1
+metadata:
+  annotations:
+    feature: ihavecoolfeature
+  labels:
+    os: rocky9
+    type: server
+  name: mycooltestagent
+spec:
+  tasks:
+    - name: install cool service
+      lock:
+        key: cool-service
+        ttl: 10m
+      commands:
+        - command: touch /tmp/test
+      files:
+      - content: |
+          filecontentishere
+        path: /tmp/test.systemd
+        systemd:
+          action: restart
+          name: exporter_exporter
+          daemonreload: true
+`
+
+	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c := initMasterAgent(t, ctx)
+
+	c.commander.Mock.On("Run", "systemctl restart exporter_exporter").Return("", "", nil).Once()
+	c.commander.Mock.On("Run", "systemctl daemon reload").Return("", "", nil).Once()
+	c.commander.Mock.On("Run", "touch /tmp/test").Return("", "", nil).Twice()
+
+	c.redis.On("SetNX", mock.Anything, "gmc.lockcool-service", "mycooltestagent", time.Minute*10).
+		Return(redis.NewBoolResult(true, nil)).
+		Twice()
+
+	c.redis.On("Del", mock.Anything, "gmc.lockcool-service").
+		Return(redis.NewIntResult(1, nil)).
+		Twice()
+
+	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
+	assert.NoError(t, err)
+
+	time.Sleep(2 * time.Second)
+
+	content, err := os.ReadFile("/tmp/test.systemd")
+	assert.NoError(t, err)
+	assert.EqualValues(t, "filecontentishere\n", content)
+
+	cancel()
+	c.wg.Wait()
+}
+
 func TestCliCommand(t *testing.T) {
 	os.Setenv("NO_COLOR", "true")
 	t.Cleanup(func() {
@@ -141,8 +209,7 @@ metadata:
     type: server
   name: mycooltestagent
 spec:
-  ip: 127.0.0.1
-  lines: []`
+  ip: 127.0.0.1`
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
@@ -191,8 +258,7 @@ metadata:
     type: server
   name: mycooltestagent
 spec:
-  ip: 127.0.0.1
-  lines: []`
+  ip: 127.0.0.1`
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
@@ -235,8 +301,7 @@ metadata:
     type: server
   name: mycooltestagent
 spec:
-  ip: 127.0.0.1
-  lines: []`
+  ip: 127.0.0.1`
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
@@ -277,12 +342,12 @@ metadata:
     type: server
   name: mycooltestagent
 spec:
-  files:
-  - content: |
-      itsfromgit
-    path: newfile.txt
-  ip: 127.0.0.1
-  lines: []`
+  tasks:
+    - files:
+      - content: |
+          itsfromgit
+        path: newfile.txt
+  ip: 127.0.0.1`
 
 	err := os.WriteFile("./gitrepo/mycooltestagent.yml", []byte(machineYaml), 0666)
 	assert.NoError(t, err)
@@ -319,10 +384,11 @@ metadata:
   name: mycooltestagent
 spec:
   ip: 127.0.0.1
-  files:
-  - content: |
-      filecontentishere
-    path: newfile.txt
+  tasks:
+    - files:
+      - content: |
+          filecontentishere
+        path: newfile.txt
   lines: []`
 
 	err = os.WriteFile("./newspec.yml", []byte(applyMachineYaml), 0666)

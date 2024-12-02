@@ -9,7 +9,7 @@ import (
 )
 
 // Only yum for now.
-func (mr *MachineReconciler) packages(packages types.Packages) error {
+func (mr *MachineReconciler) packages(packages types.Packages) {
 	for _, pkg := range packages {
 		err := mr.installPackage(pkg)
 		if err != nil {
@@ -17,7 +17,6 @@ func (mr *MachineReconciler) packages(packages types.Packages) error {
 			continue
 		}
 	}
-	return nil
 }
 
 func (mr *MachineReconciler) installPackage(pkg *types.Package) error {

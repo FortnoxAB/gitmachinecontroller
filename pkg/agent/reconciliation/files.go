@@ -21,7 +21,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (mr *MachineReconciler) files(files types.Files) error {
+func (mr *MachineReconciler) files(files types.Files) {
 	for _, file := range files {
 		if file.URL != "" && file.Content != "" {
 			logrus.Error(fmt.Errorf("file can only have Content or URL, not both"))
@@ -52,7 +52,6 @@ func (mr *MachineReconciler) files(files types.Files) error {
 			continue
 		}
 	}
-	return nil
 }
 
 func writeContentIfNeeded(file *types.File) (bool, error) {

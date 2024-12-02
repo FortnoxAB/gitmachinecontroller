@@ -247,7 +247,7 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 			return err
 		}
 
-		recon := reconciliation.NewMachineReconciler(a.commander)
+		recon := reconciliation.NewMachineReconciler(a.commander, a.client)
 		return recon.Reconcile(machine)
 	} else {
 		if msg.Source == protocol.ManualSource && a.config.Ignore {
@@ -259,7 +259,7 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 		}
 	}
 
-	recon := reconciliation.NewMachineReconciler(a.commander)
+	recon := reconciliation.NewMachineReconciler(a.commander, a.client)
 	return recon.Reconcile(machine)
 }
 
