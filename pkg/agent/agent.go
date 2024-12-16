@@ -25,7 +25,7 @@ type OnFunc func(*protocol.WebsocketMessage) error
 
 type Agent struct {
 	Master     string
-	OneShot    bool
+	oneShot    bool
 	Dry        bool
 	Hostname   string
 	Zone       string
@@ -42,7 +42,7 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 	m := &Agent{
 		Master:     c.String("master"),
 		configFile: c.String("config"),
-		OneShot:    c.Bool("one-shot"),
+		oneShot:    c.Bool("one-shot"),
 		Dry:        c.Bool("dry"),
 		Hostname:   c.String("hostname"),
 		Zone:       c.String("zone"),
@@ -247,8 +247,7 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 			return err
 		}
 
-		recon := reconciliation.NewMachineReconciler(a.commander, a.client)
-		return recon.Reconcile(machine)
+		return a.doRecon(machine)
 	} else {
 		if msg.Source == protocol.ManualSource && a.config.Ignore {
 			a.config.Ignore = false
@@ -259,8 +258,21 @@ func (a *Agent) onMachineUpdate(msg *protocol.WebsocketMessage) error {
 		}
 	}
 
+	return a.doRecon(machine)
+}
+
+func (a *Agent) doRecon(machine *types.Machine) error {
 	recon := reconciliation.NewMachineReconciler(a.commander, a.client)
-	return recon.Reconcile(machine)
+	err := recon.Reconcile(machine)
+
+	if a.oneShot {
+		if err != nil {
+			logrus.Error(err)
+		}
+		os.Exit(0) // Exit here after first sync if --one-shot is true
+	}
+
+	return err
 }
 
 func (a *Agent) reader(ctx context.Context) {

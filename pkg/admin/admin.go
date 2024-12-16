@@ -41,7 +41,8 @@ type Admin struct {
 	dry      bool
 
 	// binary location when Bootstrap
-	location string
+	targetPath string
+	sshUser    string
 }
 
 func NewAdminFromContext(c *cli.Context) *Admin {
@@ -50,7 +51,8 @@ func NewAdminFromContext(c *cli.Context) *Admin {
 		selector:   c.String("selector"),
 		regexp:     c.String("regexp"),
 		dry:        c.Bool("dry"),
-		location:   c.String("location"),
+		targetPath: c.String("target-path"),
+		sshUser:    c.String("ssh-user"),
 	}
 }
 
@@ -276,23 +278,6 @@ func (a *Admin) Apply(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (a *Admin) Bootstrap(ctx context.Context) error {
-	conf, err := a.config()
-	if err != nil {
-		return err
-	}
-
-	// find where own binary is located
-	// SCP binary to target
-	// ssh to target and start binary with --one-shot
-	// (do we need to wait that it shows up in pending list?)
-	// call /api/machines/accept-v1 with {"host":hostname} body
-
-	// it will configure it-self from git and then die and start itself with systemd.
-
-	fmt.Println(conf)
-	return nil
-}
 func (a *Admin) Proxy(ctx context.Context) error {
 	conf, err := a.config()
 	if err != nil {
