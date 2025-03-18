@@ -30,7 +30,6 @@ type testWrapper struct {
 }
 
 func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
-
 	logrus.SetLevel(logrus.DebugLevel)
 	port, err := freePort()
 	assert.NoError(t, err)
@@ -45,14 +44,14 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 		RedisClient:     redisMock,
 		Masters: config.Masters{
 			{
-				URL:  "http://localhost:" + portStr,
+				URL:  "http://127.0.0.1:" + portStr,
 				Zone: "zone1",
 			},
 		},
 	}
 	mockedCommander := mocks.NewMockCommander(t)
 	agent := agent.NewAgent("./agentConfig", mockedCommander)
-	agent.Master = "http://localhost:" + portStr
+	agent.Master = "http://127.0.0.1:" + portStr
 	agent.Hostname = "mycooltestagent"
 
 	wg := &sync.WaitGroup{}
@@ -72,7 +71,7 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 	}()
 
 	time.Sleep(400 * time.Millisecond)
-	client := authedhttpclient.New(t, "http://localhost:"+portStr)
+	client := authedhttpclient.New(t, "http://127.0.0.1:"+portStr)
 	err = client.AuthAsAdmin()
 	assert.NoError(t, err)
 
@@ -90,7 +89,7 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 }
 func freePort() (port int, err error) {
 	var a *net.TCPAddr
-	if a, err = net.ResolveTCPAddr("tcp", "localhost:0"); err == nil {
+	if a, err = net.ResolveTCPAddr("tcp", "127.0.0.1:0"); err == nil {
 		var l *net.TCPListener
 		if l, err = net.ListenTCP("tcp", a); err == nil {
 			port := l.Addr().(*net.TCPAddr).Port

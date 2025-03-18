@@ -625,6 +625,10 @@ func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts
 			continue
 		}
 
+		if len(b) == 0 {
+			continue // skip empty files
+		}
+
 		err = yaml.Unmarshal(b, machine)
 		if err != nil {
 			logrus.Errorf("error yaml parse: %s err: %s", path, err)
