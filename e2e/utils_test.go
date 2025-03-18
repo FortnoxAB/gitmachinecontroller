@@ -14,13 +14,14 @@ import (
 	"github.com/fortnoxab/gitmachinecontroller/mocks"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/authedhttpclient"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/master"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )
 
 type testWrapper struct {
-	client    *authedHttpClient
+	client    *authedhttpclient.Client
 	master    *master.Master
 	agent     *agent.Agent
 	commander *mocks.MockCommander
@@ -71,7 +72,9 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 	}()
 
 	time.Sleep(400 * time.Millisecond)
-	client := NewAuthedHttpClient(t, "http://localhost:"+portStr)
+	client := authedhttpclient.New(t, "http://localhost:"+portStr)
+	err = client.AuthAsAdmin()
+	assert.NoError(t, err)
 
 	t.Cleanup(func() {
 		os.Remove("./agentConfig")

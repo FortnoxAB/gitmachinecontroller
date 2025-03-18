@@ -62,8 +62,6 @@ func (a *Admin) Bootstrap(ctx context.Context, hosts []string) error {
 			return err
 		}
 
-		//TODO invoke gmc agent --one-shot --master <firstmasterinconfig>
-
 	}
 	return nil
 }
