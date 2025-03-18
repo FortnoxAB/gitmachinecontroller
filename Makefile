@@ -6,7 +6,7 @@ VERSION?=0.0.1-local
 IMAGE = quay.io/fortnox/gitmachinecontroller
 
 build:
-	CGO_ENABLED=0 GOOS=linux go build
+	CGO_ENABLED=0 GOOS=linux go build -o gmc ./cmd/gmc
 
 docker: build
 	docker build --pull --rm -t $(IMAGE):$(VERSION) .
