@@ -233,7 +233,7 @@ func app() *cli.App {
 			Usage: "installs the agent on a new machine.",
 			Action: func(c *cli.Context) error {
 				admin := admin.NewAdminFromContext(c)
-				return admin.Bootstrap(c.Context)
+				return admin.Bootstrap(c.Context, c.Args().Slice())
 			},
 			Flags: []cli.Flag{
 				&cli.StringFlag{
@@ -244,10 +244,15 @@ func app() *cli.App {
 					Usage:   "config file location. contains info about the master urls",
 				},
 				&cli.StringFlag{
-					// this is the client for SREs so it needs to have a config somewhere.
-					Name:  "location",
+					Name:  "target-path",
 					Value: "/usr/local/bin",
 					Usage: "where to put the gmc binary when bootstrapping",
+				},
+				&cli.StringFlag{
+					Name:    "ssh-user",
+					Value:   "",
+					Aliases: []string{"u"},
+					Usage:   "which user to ssh as",
 				},
 				&cli.BoolFlag{
 					Name:  "dry",
