@@ -226,7 +226,7 @@ spec:
 	time.Sleep(2 * time.Second)
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
-		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
+		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
 		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
 	assert.NoError(t, err)
 
@@ -273,11 +273,14 @@ spec:
 	time.Sleep(2 * time.Second)
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
-		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
+		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
 		"token":"%s"}`, c.master.WsPort, "blaha")), 0666)
 	assert.NoError(t, err)
 
 	buf := &bytes.Buffer{}
+	logrus.SetFormatter(&logrus.TextFormatter{
+		DisableColors: true,
+	})
 	logrus.SetOutput(buf)
 	a := admin.NewAdmin("./adminConfig", "", "")
 	err = a.Exec(context.TODO(), "uptime")
@@ -362,7 +365,7 @@ spec:
 	time.Sleep(1 * time.Second)
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
-		{"masters":[{"name":"http://localhost:%s","zone":"zone1"}],
+		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
 		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
 	assert.NoError(t, err)
 
