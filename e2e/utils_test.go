@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,12 +22,13 @@ import (
 )
 
 type testWrapper struct {
-	client    *authedhttpclient.Client
-	master    *master.Master
-	agent     *agent.Agent
-	commander *mocks.MockCommander
-	wg        *sync.WaitGroup
-	redis     *mocks.MockCmdable
+	client          *authedhttpclient.Client
+	master          *master.Master
+	agent           *agent.Agent
+	commander       *mocks.MockCommander
+	wg              *sync.WaitGroup
+	redis           *mocks.MockCmdable
+	waitForAccepted func()
 }
 
 func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
@@ -85,6 +87,13 @@ func initMasterAgent(t *testing.T, ctx context.Context) testWrapper {
 		commander: mockedCommander,
 		wg:        wg,
 		redis:     redisMock,
+		waitForAccepted: func() {
+			WaitFor(t, time.Second*2, "wait for accepted", func() bool {
+				resp, err := client.Get("/api/machines-v1")
+				b := getBody(t, resp.Body)
+				return err == nil && strings.Contains(b, `"Accepted":true`) && strings.Contains(b, `"Online":true`)
+			})
+		},
 	}
 }
 func freePort() (port int, err error) {
@@ -141,6 +150,7 @@ func captureStdout() func() string {
 		}
 	}
 */
+
 func WaitFor(t *testing.T, timeout time.Duration, msg string, ok func() bool) {
 	end := time.Now().Add(timeout)
 	for {
