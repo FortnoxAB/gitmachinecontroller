@@ -35,7 +35,7 @@ func TestMasterAgentAccept(t *testing.T) {
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
 
-	time.Sleep(200 * time.Millisecond)
+	c.waitForAccepted()
 	resp, err = c.client.Get("/machines")
 	assert.NoError(t, err)
 	body = getBody(t, resp.Body)
@@ -115,10 +115,14 @@ spec:
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	c.waitForAccepted()
 
 	// make sure we fetched file from http server with sha256 hash
-	content, err := os.ReadFile("/tmp/testfromurl")
+	var content []byte
+	WaitFor(t, time.Second*3, "wait for file", func() bool {
+		content, err = os.ReadFile("/tmp/testfromurl")
+		return len(content) != 0
+	})
 	assert.NoError(t, err)
 	assert.EqualValues(t, "the file content", content)
 
@@ -126,6 +130,7 @@ spec:
 	assert.NoError(t, err)
 	assert.EqualValues(t, "filecontentishere\n", content)
 
+	time.Sleep(time.Second)
 	cancel()
 	c.wg.Wait()
 }
@@ -184,12 +189,17 @@ spec:
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	c.waitForAccepted()
 
-	content, err := os.ReadFile("/tmp/test.systemd")
+	var content []byte
+	WaitFor(t, time.Second*3, "wait for file", func() bool {
+		content, err = os.ReadFile("/tmp/test.systemd")
+		return len(content) != 0
+	})
 	assert.NoError(t, err)
 	assert.EqualValues(t, "filecontentishere\n", content)
 
+	time.Sleep(time.Second)
 	cancel()
 	c.wg.Wait()
 }
@@ -223,7 +233,7 @@ spec:
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
 
-	time.Sleep(2 * time.Second)
+	c.waitForAccepted()
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
 		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
@@ -269,8 +279,7 @@ spec:
 
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
-
-	time.Sleep(2 * time.Second)
+	c.waitForAccepted()
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
 		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
@@ -315,8 +324,7 @@ spec:
 
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
-
-	time.Sleep(2 * time.Second)
+	c.waitForAccepted()
 
 	buf := &bytes.Buffer{}
 	logrus.SetOutput(buf)
@@ -361,8 +369,7 @@ spec:
 
 	_, err = c.client.Post("/api/machines/accept-v1", bytes.NewBufferString(`{"host":"mycooltestagent"}`))
 	assert.NoError(t, err)
-
-	time.Sleep(1 * time.Second)
+	c.waitForAccepted()
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
 		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
@@ -370,7 +377,7 @@ spec:
 	assert.NoError(t, err)
 
 	var content []byte
-	WaitFor(t, 1*time.Second, "file to have content from git", func() bool {
+	WaitFor(t, 2*time.Second, "file to have content from git", func() bool {
 		content, err = os.ReadFile("./newfile.txt")
 		return err == nil
 	})
@@ -406,7 +413,7 @@ spec:
 	out := stdout()
 	assert.Contains(t, out, "apply file:  newspec.yml")
 
-	WaitFor(t, 1*time.Second, "file to have content from apply", func() bool {
+	WaitFor(t, 2*time.Second, "file to have content from apply", func() bool {
 		content, err = os.ReadFile("./newfile.txt")
 		assert.NoError(t, err)
 		return string(content) == "filecontentishere\n"
@@ -441,7 +448,7 @@ spec:
 	err = a.Apply(ctx, []string{"newspec.yml"})
 	assert.NoError(t, err)
 
-	WaitFor(t, 1*time.Second, "file to have content from git again", func() bool {
+	WaitFor(t, 2*time.Second, "file to have content from git again", func() bool {
 		content, err = os.ReadFile("./newfile.txt")
 		assert.NoError(t, err)
 		return string(content) == "itsfromgit\n"
