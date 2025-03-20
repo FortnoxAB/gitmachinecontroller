@@ -31,6 +31,9 @@ type Webserver struct {
 	jwt            *jwt.JWTHandler
 	MachineStateCh chan types.MachineStateQuestion
 	EnableMetrics  bool
+	TLSCertFile    string
+	TLSKeyFile     string
+	TLSPort        string
 	secretHandler  *secrets.Handler
 }
 
@@ -53,6 +56,18 @@ func (ws *Webserver) Init() *gin.Engine {
 		p.Use(router)
 	}
 
+	logIgnorePaths := []string{
+		"/health",
+		"/metrics",
+		"/readiness",
+	}
+	router.Use(ginlogrus.New(logrus.StandardLogger(), logIgnorePaths...), gin.Recovery())
+	router.GET("/health")
+	pprof.Register(router)
+	return router
+}
+func (ws *Webserver) InitTLS() *gin.Engine {
+	router := gin.New()
 	logIgnorePaths := []string{
 		"/health",
 		"/metrics",
@@ -85,7 +100,6 @@ func (ws *Webserver) Init() *gin.Engine {
 
 	ws.initWS(router)
 
-	pprof.Register(router)
 	return router
 }
 func (ws *Webserver) secretEncrypt(c *gin.Context) error {
@@ -174,7 +188,7 @@ const acceptHost = (hostname) =>  {
         headers: {
             "Content-Type":"application/json",
         },
-		body: JSON.stringify({host: hostname})      
+		body: JSON.stringify({host: hostname})
     }
     fetch("/api/machines/accept-v1", options);
 	location.reload();
@@ -315,35 +329,64 @@ func (ws *Webserver) initWS(router *gin.Engine) {
 	})
 }
 func (ws *Webserver) Start(ctx context.Context) {
-	srv := &http.Server{
-		ReadTimeout:       1 * time.Second,
-		WriteTimeout:      1 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		ReadHeaderTimeout: 2 * time.Second,
-		Addr:              ":" + ws.Port,
-		Handler:           ws.Init(),
-	}
 
 	go func() {
+		srv := &http.Server{
+			ReadTimeout:       1 * time.Second,
+			WriteTimeout:      1 * time.Second,
+			IdleTimeout:       30 * time.Second,
+			ReadHeaderTimeout: 2 * time.Second,
+			Addr:              ":" + ws.Port,
+			Handler:           ws.Init(),
+		}
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logrus.Fatalf("error starting webserver %s", err)
 		}
+		<-ctx.Done()
+
+		if os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "" {
+			logrus.Debug("sleeping 5 sec before shutdown") // to give k8s ingresses time to sync
+			time.Sleep(5 * time.Second)
+		}
+		ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctxShutDown); !errors.Is(err, http.ErrServerClosed) && err != nil {
+			logrus.Error(err)
+		}
 	}()
+
+	//TODO refactor less duplication
+	if ws.TLSCertFile != "" && ws.TLSKeyFile != "" {
+		srv := &http.Server{
+			ReadTimeout:       1 * time.Second,
+			WriteTimeout:      1 * time.Second,
+			IdleTimeout:       30 * time.Second,
+			ReadHeaderTimeout: 2 * time.Second,
+			Addr:              ":" + ws.TLSPort,
+			Handler:           ws.InitTLS(),
+		}
+		go func() {
+			if err := srv.ListenAndServeTLS(ws.TLSCertFile, ws.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logrus.Fatalf("error starting webserver %s", err)
+			}
+			<-ctx.Done()
+
+			if os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "" {
+				logrus.Debug("sleeping 5 sec before shutdown") // to give k8s ingresses time to sync
+				time.Sleep(5 * time.Second)
+			}
+			ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := srv.Shutdown(ctxShutDown); !errors.Is(err, http.ErrServerClosed) && err != nil {
+				logrus.Error(err)
+			}
+		}()
+	}
 
 	logrus.Debug("webserver started")
 
-	<-ctx.Done()
-
-	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "" {
-		logrus.Debug("sleeping 5 sec before shutdown") // to give k8s ingresses time to sync
-		time.Sleep(5 * time.Second)
-	}
-	ctxShutDown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := srv.Shutdown(ctxShutDown); !errors.Is(err, http.ErrServerClosed) && err != nil {
-		logrus.Error(err)
-	}
 }
 func (ws *Webserver) ApproveAgent(hostname string) error {
 	sessions, err := ws.Websocket.Sessions()

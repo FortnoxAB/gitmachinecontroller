@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,8 @@ type Admin struct {
 	// binary location when Bootstrap
 	targetPath string
 	sshUser    string
+
+	tlsConfig *tls.Config
 }
 
 func NewAdminFromContext(c *cli.Context) *Admin {
@@ -56,12 +59,21 @@ func NewAdminFromContext(c *cli.Context) *Admin {
 	}
 }
 
-func NewAdmin(configFile, selector, regexp string) *Admin {
+func NewAdmin(configFile, selector, regexp string, options ...func(*Admin)) *Admin {
 
-	return &Admin{
+	a := &Admin{
 		configFile: configFile,
 		selector:   selector,
 		regexp:     regexp,
+	}
+	for _, o := range options {
+		o(a)
+	}
+	return a
+}
+func WithTLSConfig(c *tls.Config) func(*Admin) {
+	return func(s *Admin) {
+		s.tlsConfig = c
 	}
 }
 
@@ -71,6 +83,9 @@ func (a *Admin) wsConnect(ctx context.Context, conf *config.Config) (websocket.W
 	headers.Set("Authorization", conf.Token)
 
 	wsClient := websocket.NewWebsocketClient()
+	if a.tlsConfig != nil {
+		wsClient.SetTLSConfig(a.tlsConfig)
+	}
 
 	master := conf.FindMasterForConnection(ctx, "", "")
 
