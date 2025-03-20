@@ -82,12 +82,15 @@ type Master struct {
 	SecretKey         string
 	JWTKey            string
 	WsPort            string
+	WsTLSPort         string
 	Masters           config.Masters
 	EnableMetrics     bool
 	webserver         *webserver.Webserver
 	machineStateCh    chan types.MachineStateQuestion
 	secretHandler     *secrets.Handler
 	RedisClient       redis.Cmdable
+	TLSCertFile       string
+	TLSKeyFIle        string
 }
 
 func NewMasterFromContext(c *cli.Context) *Master {
@@ -104,7 +107,10 @@ func NewMasterFromContext(c *cli.Context) *Master {
 		SecretKey:         c.String("secret-key"),
 		JWTKey:            c.String("jwt-key"),
 		WsPort:            c.String("port"),
+		WsTLSPort:         c.String("tls-port"),
 		EnableMetrics:     true,
+		TLSCertFile:       c.String("tls-cert"),
+		TLSKeyFIle:        c.String("tls-key"),
 	}
 	if c.String("redis-url") != "" {
 		opt, err := redis.ParseURL(c.String("redis-url"))
@@ -143,7 +149,10 @@ func (m *Master) Run(ctx context.Context) error {
 	m.webserver = webserver.New(m.WsPort, m.JWTKey, m.Masters, m.secretHandler)
 	m.webserver.MachineStateCh = m.machineStateCh
 	m.webserver.EnableMetrics = m.EnableMetrics
-	go m.webserver.Start(ctx)
+	m.webserver.TLSKeyFile = m.TLSKeyFIle
+	m.webserver.TLSCertFile = m.TLSCertFile
+	m.webserver.TLSPort = m.WsTLSPort
+	m.webserver.Start(ctx)
 
 	return m.run(ctx)
 }

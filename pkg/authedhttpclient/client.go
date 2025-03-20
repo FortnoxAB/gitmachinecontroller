@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/fortnoxab/gitmachinecontroller/pkg/httpclient"
 )
 
 type Client struct {
@@ -24,7 +26,7 @@ func (ahc *Client) AuthAsAdmin() error {
 		Jwt string
 	}
 
-	resp, err := http.Post(ahc.baseURL+"/api/admin-v1", "application/json", nil)
+	resp, err := httpclient.DefaultClient.Post(ahc.baseURL+"/api/admin-v1", "application/json", nil)
 	if err != nil {
 		return err
 	}
@@ -51,7 +53,7 @@ func (ahc *Client) Post(u string, body io.Reader) (resp *http.Response, err erro
 
 	req.Header.Add("Authorization", ahc.Token)
 
-	return http.DefaultClient.Do(req)
+	return httpclient.DefaultClient.Do(req)
 }
 func (ahc *Client) Get(u string) (resp *http.Response, err error) {
 	u = strings.TrimLeft(u, "/")
@@ -63,5 +65,5 @@ func (ahc *Client) Get(u string) (resp *http.Response, err error) {
 
 	req.Header.Add("Authorization", ahc.Token)
 
-	return http.DefaultClient.Do(req)
+	return httpclient.DefaultClient.Do(req)
 }

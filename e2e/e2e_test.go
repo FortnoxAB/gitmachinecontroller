@@ -130,7 +130,7 @@ spec:
 	assert.NoError(t, err)
 	assert.EqualValues(t, "filecontentishere\n", content)
 
-	time.Sleep(time.Second)
+	time.Sleep(time.Second * 1)
 	cancel()
 	c.wg.Wait()
 }
@@ -236,13 +236,13 @@ spec:
 	c.waitForAccepted()
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
-		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
-		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
+		{"masters":[{"name":"https://127.0.0.1:%s","zone":"zone1"}],
+		"token":"%s"}`, c.master.WsTLSPort, c.client.Token)), 0666)
 	assert.NoError(t, err)
 
 	stdout := captureStdout()
 
-	a := admin.NewAdmin("./adminConfig", "", "")
+	a := admin.NewAdmin("./adminConfig", "", "", admin.WithTLSConfig(trustCert("./cert.pem")))
 	err = a.Exec(context.TODO(), "uptime")
 	assert.NoError(t, err)
 
@@ -282,8 +282,8 @@ spec:
 	c.waitForAccepted()
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
-		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
-		"token":"%s"}`, c.master.WsPort, "blaha")), 0666)
+		{"masters":[{"name":"https://127.0.0.1:%s","zone":"zone1"}],
+		"token":"%s"}`, c.master.WsTLSPort, "blaha")), 0666)
 	assert.NoError(t, err)
 
 	buf := &bytes.Buffer{}
@@ -291,7 +291,7 @@ spec:
 		DisableColors: true,
 	})
 	logrus.SetOutput(buf)
-	a := admin.NewAdmin("./adminConfig", "", "")
+	a := admin.NewAdmin("./adminConfig", "", "", admin.WithTLSConfig(trustCert("./cert.pem")))
 	err = a.Exec(context.TODO(), "uptime")
 	assert.Equal(t, "websocket: bad handshake", err.Error())
 
@@ -328,7 +328,7 @@ spec:
 
 	buf := &bytes.Buffer{}
 	logrus.SetOutput(buf)
-	a := admin.NewAdmin("./agentConfig", "", "")
+	a := admin.NewAdmin("./agentConfig", "", "", admin.WithTLSConfig(trustCert("./cert.pem")))
 	err = a.Exec(context.TODO(), "uptime")
 	assert.NoError(t, err)
 
@@ -372,8 +372,8 @@ spec:
 	c.waitForAccepted()
 
 	err = os.WriteFile("./adminConfig", []byte(fmt.Sprintf(`
-		{"masters":[{"name":"http://127.0.0.1:%s","zone":"zone1"}],
-		"token":"%s"}`, c.master.WsPort, c.client.Token)), 0666)
+		{"masters":[{"name":"https://127.0.0.1:%s","zone":"zone1"}],
+		"token":"%s"}`, c.master.WsTLSPort, c.client.Token)), 0666)
 	assert.NoError(t, err)
 
 	var content []byte
@@ -406,7 +406,7 @@ spec:
 
 	stdout := captureStdout()
 
-	a := admin.NewAdmin("./adminConfig", "", "")
+	a := admin.NewAdmin("./adminConfig", "", "", admin.WithTLSConfig(trustCert("./cert.pem")))
 	err = a.Apply(ctx, []string{"newspec.yml"})
 	assert.NoError(t, err)
 

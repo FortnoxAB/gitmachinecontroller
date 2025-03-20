@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -53,7 +54,7 @@ func NewAgentFromContext(c *cli.Context) *Agent {
 	}
 	return m
 }
-func NewAgent(configFile string, commander command.Commander) *Agent {
+func NewAgent(configFile string, commander command.Commander, options ...func(*Agent)) *Agent {
 	m := &Agent{
 		wg:         &sync.WaitGroup{},
 		callbacks:  make(map[string][]OnFunc),
@@ -61,7 +62,16 @@ func NewAgent(configFile string, commander command.Commander) *Agent {
 		configFile: configFile,
 		commander:  commander,
 	}
+	for _, o := range options {
+		o(m)
+	}
 	return m
+}
+
+func WithTLSConfig(c *tls.Config) func(*Agent) {
+	return func(s *Agent) {
+		s.client.SetTLSConfig(c)
+	}
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -73,7 +83,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			conf = &config.Config{
 				Masters: config.Masters{&config.Master{URL: a.Master}},
 			}
-			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
+			err = os.MkdirAll(filepath.Dir(a.configFile), 0700)
 			if err != nil {
 				return err
 			}

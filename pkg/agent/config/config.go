@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fortnoxab/gitmachinecontroller/pkg/httpclient"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/websocket"
 	"github.com/sirupsen/logrus"
 )
@@ -142,7 +143,7 @@ func (m Master) isAlive() (Masters, error) {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpclient.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
