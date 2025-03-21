@@ -41,6 +41,8 @@ type Admin struct {
 	regexp   string
 	dry      bool
 
+	zone string
+
 	// binary location when Bootstrap
 	targetPath string
 	sshUser    string
@@ -56,6 +58,7 @@ func NewAdminFromContext(c *cli.Context) *Admin {
 		dry:        c.Bool("dry"),
 		targetPath: c.String("target-path"),
 		sshUser:    c.String("ssh-user"),
+		zone:       c.String("zone"),
 	}
 }
 
