@@ -27,17 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-/*
-TODO
-	Think about HA?
-HA
-* clients connect to prefered master
-* admin command knows all masters
-	* do we want leaderelection so only one syncs from git? Probably!
-	* how to ensure clients fetches from the current leader?
-
-*/
-
 type websocketRequestResponse struct {
 	list  map[string]chan *websocketRequest
 	mutex *sync.RWMutex
@@ -264,13 +253,6 @@ func (m *Master) run(ctx context.Context) error {
 		}
 	}
 
-	// if ref := obj.Spec.Reference; ref != nil {
-	// https://github.com/fluxcd/source-controller/blob/16fed8995d1f5ba818697220fd2020f78e2cc630/controllers/gitrepository_controller.go#L733
-	// cloneOpts.Branch = ref.Branch
-	// cloneOpts.Commit = ref.Commit
-	// cloneOpts.Tag = ref.Tag
-	// cloneOpts.SemVer = ref.SemVer
-	// }
 }
 
 func (m *Master) stateRunner(ctx context.Context, ch chan *types.Machine, websocketCh chan *websocketRequest, machineUpd chan machineUpdate) {
@@ -474,7 +456,7 @@ func (m *Master) handleRequest(ctx context.Context, machines map[string]*types.M
 		machineUpdateCh <- machineUpdate{Machine: machine, Source: protocol.ManualSource}
 
 	case "agent-aqure-lock":
-		if admin, _ := sess.Get("allowed"); !admin.(bool) {
+		if allowed, _ := sess.Get("allowed"); !allowed.(bool) {
 			return fmt.Errorf("agent-aqure-lock permission denied")
 		}
 		l := &protocol.AgentLock{}
@@ -564,35 +546,6 @@ func sendIsLast(sess *melody.Session, reqID string) {
 	if err != nil {
 		logrus.Errorf("sendIsLast error: %s", err)
 	}
-}
-
-type Cloner interface {
-	Clone(ctx context.Context, url string, cloneOpts repository.CloneConfig) (*git.Commit, error)
-	Close()
-}
-
-type testCloner struct {
-	dir string
-}
-
-func (tc *testCloner) Clone(ctx context.Context, URL string, cloneOpts repository.CloneConfig) (*git.Commit, error) {
-
-	u, err := url.Parse(URL)
-	if err != nil {
-		return nil, err
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-
-	from := filepath.Join(cwd, u.Path)
-	logrus.Infof("testCloner: copy %s to %s", from, tc.dir)
-	err = os.CopyFS(tc.dir, os.DirFS(from))
-	return nil, err
-}
-func (tc *testCloner) Close() {
-
 }
 
 func (m *Master) clone(ctx context.Context, authOpts *git.AuthOptions, cloneOpts repository.CloneConfig, manifestCh chan machineUpdate) error {
