@@ -99,6 +99,8 @@ type File struct {
 	Content     string            `json:"content"`
 	URL         string            `json:"url,omitempty"`
 	Mode        string            `json:"mode"`
+	User        string            `json:"user"`
+	Group       string            `json:"group"`
 }
 
 func (f File) FileMode() (os.FileMode, error) {

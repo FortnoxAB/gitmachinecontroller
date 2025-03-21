@@ -79,7 +79,7 @@ func (mr *MachineReconciler) unitNeedsTrigger(systemd *types.SystemdReference) {
 }
 
 func (mr *MachineReconciler) runSystemdTriggers() error {
-	if mr.daemonReloadNeeded {
+	if mr.daemonReloadNeeded && len(mr.restartUnits) > 0 {
 		_, _, err := mr.commander.Run("systemctl daemon reload")
 		if err != nil {
 			return err

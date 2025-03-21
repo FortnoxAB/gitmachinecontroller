@@ -93,12 +93,6 @@ func app() *cli.App {
 					Name:  "hostname",
 					Usage: "Set hostname instead of checking hostname with os.Hostname()",
 				},
-				// masters fetch and push over websocket
-				// &cli.DurationFlag{
-				// 	Name:  "poll-interval",
-				// 	Value: time.Minute,
-				// 	Usage: "How often do we sync from the masters.",
-				// },
 			},
 		},
 		{
@@ -264,6 +258,11 @@ func app() *cli.App {
 					Name:  "target-path",
 					Value: "/usr/local/bin",
 					Usage: "where to put the gmc binary when bootstrapping",
+				},
+				&cli.StringFlag{
+					Name:  "zone",
+					Value: "",
+					Usage: "which zone to connect to from the agent when bootstrapping",
 				},
 				&cli.StringFlag{
 					Name:    "ssh-user",
