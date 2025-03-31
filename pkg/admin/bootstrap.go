@@ -57,7 +57,7 @@ func (a *Admin) Bootstrap(ctx context.Context, hosts []string) error {
 			},
 			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		}
-		err := sshCommands(ctx, config, host, binaryPath, a.targetPath, master)
+		err := sshCommands(ctx, config, host, binaryPath, a.targetPath, master, a.zone)
 		if err != nil {
 			return err
 		}
@@ -66,7 +66,7 @@ func (a *Admin) Bootstrap(ctx context.Context, hosts []string) error {
 	return nil
 }
 
-func sshCommands(ctx context.Context, config *ssh.ClientConfig, host, src, dstFolder, master string) error {
+func sshCommands(ctx context.Context, config *ssh.ClientConfig, host, src, dstFolder, master, zone string) error {
 	client, err := ssh.Dial("tcp", host+":22", config)
 	if err != nil {
 		return err
@@ -109,7 +109,7 @@ func sshCommands(ctx context.Context, config *ssh.ClientConfig, host, src, dstFo
 
 	// TODO start goroutine here that checks for the server to appear in API and need accept! then accept
 
-	err = runOverSSH(ctx, client, fmt.Sprintf("sudo %s agent --one-shot --master %s", dst, master))
+	err = runOverSSH(ctx, client, fmt.Sprintf("sudo %s agent --one-shot --master %s --zone %s", dst, master, zone))
 	if err != nil {
 		return err
 	}

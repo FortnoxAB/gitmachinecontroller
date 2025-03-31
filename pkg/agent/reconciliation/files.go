@@ -14,7 +14,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
@@ -54,36 +57,124 @@ func (mr *MachineReconciler) files(files types.Files) {
 	}
 }
 
-func writeContentIfNeeded(file *types.File) (bool, error) {
-	mode, err := file.FileMode()
+// assertSameOwner returns a bool if it was changed
+func assertSameOwner(file os.FileInfo, fileSpec *types.File) (bool, error) {
+	if fileSpec.User == "" && fileSpec.Group == "" {
+		return false, nil
+	}
+	var fileUid string
+	var fileGid string
+	stat, ok := file.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, fmt.Errorf("not syscall.Stat_t")
+	}
+	fileUid = strconv.Itoa(int(stat.Uid))
+	fileGid = strconv.Itoa(int(stat.Gid))
+	u, err := user.Lookup(fileSpec.User)
 	if err != nil {
 		return false, err
 	}
+	g, err := user.LookupGroup(fileSpec.User)
+	if err != nil {
+		return false, err
+	}
+
+	if fileUid == u.Uid && fileGid == g.Gid {
+		return false, nil
+	}
+
+	return true, os.Chown(file.Name(), int(stat.Uid), int(stat.Gid))
+}
+func chown(file *os.File, userName, group string) error {
+	if userName == "" && group == "" {
+		return nil
+	}
+	u, err := user.Lookup(userName)
+	if err != nil {
+		return err
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return err
+	}
+
+	newUid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return err
+	}
+	newGid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return err
+	}
+	return file.Chown(newUid, newGid)
+}
+func chownName(file, userName, group string) error {
+	if userName == "" && group == "" {
+		return nil
+	}
+	u, err := user.Lookup(userName)
+	if err != nil {
+		return err
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return err
+	}
+
+	newUid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return err
+	}
+	newGid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return err
+	}
+	return os.Chown(file, newUid, newGid)
+}
+
+func writeContentIfNeeded(file *types.File) (bool, error) {
+	newMode, err := file.FileMode()
+	if err != nil {
+		return false, err
+	}
+
 	statedFile, err := os.Stat(file.Path)
 	if errors.Is(err, os.ErrNotExist) { // New file we can write directly to desired location
-		err = os.WriteFile(file.Path, []byte(file.Content), mode)
+		err = os.WriteFile(file.Path, []byte(file.Content), newMode)
 		if err != nil {
 			return false, err
+		}
+		err = chownName(file.Path, file.User, file.Group)
+		if err != nil {
+			return true, err
 		}
 		return true, nil
 	}
 
-	equal := true
-	if int64(len(file.Content)) != statedFile.Size() {
+	equal := false
+	if int64(len(file.Content)) == statedFile.Size() { // we only need to do expensive fileEqual if size are the same
 		equal, err = fileEqual(file.Content, file.Path)
 		if err != nil {
 			return false, err
 		}
 	}
 	if equal {
-		if mode != statedFile.Mode() { // check if content was same but we need to update mode
-			err = os.Chmod(file.Path, mode)
+		var changedMode bool
+		if newMode != statedFile.Mode() { // check if content was same but we need to update newMode
+			err = os.Chmod(file.Path, newMode)
 			if err != nil {
 				return false, err
 			}
+			changedMode = true
 		}
+		var changedOwner bool
+		changedOwner, err = assertSameOwner(statedFile, file)
+		if err != nil {
+			return false, err
+		}
+
 		logrus.Debug(file.Path, " already equal")
-		return false, nil
+		return changedOwner || changedMode, nil
 	}
 
 	// existing file we make a tempfile in the same target directory and then atomic move.
@@ -92,8 +183,12 @@ func writeContentIfNeeded(file *types.File) (bool, error) {
 		return false, err
 	}
 	defer tempFile.Close()
-	err = tempFile.Chmod(mode)
+	err = tempFile.Chmod(newMode)
+	if err != nil {
+		return false, err
+	}
 
+	err = chown(tempFile, file.User, file.Group)
 	if err != nil {
 		return false, err
 	}
@@ -126,10 +221,7 @@ func needsFetch(file *types.File) (bool, error) {
 		return false, err
 	}
 
-	if !equal {
-		return true, nil // checksum mismatch file needs fetching
-	}
-	return false, nil
+	return !equal, nil
 }
 
 func hashIsEqual(r io.Reader, checksum string) (bool, error) {
@@ -152,17 +244,42 @@ func hashIsEqual(r io.Reader, checksum string) (bool, error) {
 
 // fetchFromURL returns changed bool and an error.
 func fetchFromURL(file *types.File) (bool, error) {
-	missing, err := needsFetch(file)
+	shouldFetch, err := needsFetch(file)
 	if err != nil {
 		return false, err
 	}
 
-	// exit early if checksum already is correct.
-	if !missing {
-		return false, nil
+	// exit early if checksum already is correct. But assert chmod and chown
+	if !shouldFetch {
+		var newMode os.FileMode
+		newMode, err = file.FileMode()
+		if err != nil {
+			return false, err
+		}
+
+		var statedFile os.FileInfo
+		statedFile, err = os.Stat(file.Path)
+		if err != nil {
+			return false, err
+		}
+
+		var changedMode bool
+		var changedOwner bool
+		if newMode != statedFile.Mode() { // check if content was same but we need to update newMode
+			err = os.Chmod(file.Path, newMode)
+			if err != nil {
+				return false, err
+			}
+			changedMode = true
+		}
+		changedOwner, err = assertSameOwner(statedFile, file)
+		if err != nil {
+			return false, err
+		}
+		return changedMode || changedOwner, nil
 	}
 
-	mode, err := file.FileMode()
+	newMode, err := file.FileMode()
 	if err != nil {
 		return false, err
 	}
@@ -184,9 +301,8 @@ func fetchFromURL(file *types.File) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
-
-	tempFile.Chmod(mode)
 
 	_, err = io.Copy(tempFile, resp.Body)
 	if err != nil {
@@ -199,23 +315,16 @@ func fetchFromURL(file *types.File) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		defer os.Remove(newTempFile.Name())
 		defer newTempFile.Close()
-		newTempFile.Chmod(mode)
 
 		err = extractTarGz(tempFile, newTempFile, file.ExtractFile)
 		if err != nil {
 			return false, err
 		}
 
-		newTempFile.Seek(0, io.SeekStart)
-		equal, err := hashIsEqual(newTempFile, file.Checksum)
-		if err != nil {
-			return false, err
-		}
-		if !equal {
-			return false, fmt.Errorf("checksum mismatch. expected file to be %s", file.Checksum)
-		}
-		return true, os.Rename(newTempFile.Name(), file.Path)
+		tempFile.Close()
+		tempFile = newTempFile
 	}
 
 	tempFile.Seek(0, io.SeekStart)
@@ -226,6 +335,15 @@ func fetchFromURL(file *types.File) (bool, error) {
 	if !equal {
 		return false, fmt.Errorf("checksum mismatch. expected file to be %s", file.Checksum)
 	}
+	err = tempFile.Chmod(newMode)
+	if err != nil {
+		return false, err
+	}
+	err = chown(tempFile, file.User, file.Group)
+	if err != nil {
+		return false, err
+	}
+	tempFile.Close() // close so we can move it
 	return true, os.Rename(tempFile.Name(), file.Path)
 }
 
@@ -249,12 +367,12 @@ func extractTarGz(r io.Reader, w io.Writer, singleFile string) error {
 		}
 
 		switch header.Typeflag {
-		case tar.TypeDir:
+		case tar.TypeDir: //TODO support entire folder extracts?
 			// if err := os.Mkdir(header.Name, 0755); err != nil {
 			// 	log.Fatalf("ExtractTarGz: Mkdir() failed: %s", err.Error())
 			// }
 		case tar.TypeReg:
-			if header.Name != singleFile {
+			if filepath.Clean(header.Name) != singleFile {
 				continue
 			}
 			if _, err := io.Copy(w, tarReader); err != nil {
