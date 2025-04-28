@@ -105,7 +105,7 @@ type File struct {
 
 func (f File) FileMode() (os.FileMode, error) {
 	if f.Mode == "" {
-		return os.FileMode(0700), nil // default to this
+		return os.FileMode(0600), nil // default to this
 	}
 	u, err := strconv.ParseUint(f.Mode, 8, 32)
 	return os.FileMode(u), err

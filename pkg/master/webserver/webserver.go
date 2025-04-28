@@ -179,6 +179,12 @@ func (ws *Webserver) approveMachine(c *gin.Context) error {
 func (ws *Webserver) listPendingMachines(c *gin.Context) error {
 	t := `<!DOCTYPE html>
 <html lang="en">
+<head>
+	<style>
+		td {padding-right: 25px;}
+		tr {text-align: left;}
+	</style>
+</head>
 <body>
 <script>
 const acceptHost = (hostname) =>  {
@@ -290,7 +296,7 @@ func (ws *Webserver) hostList() (map[string]*host, error) {
 
 func (ws *Webserver) initWS(router *gin.Engine) {
 	router.GET("/api/websocket-v1", func(c *gin.Context) {
-		keys := make(map[string]interface{})
+		keys := make(map[string]any)
 		keys["allowed"] = false
 		keys["admin"] = false
 		keys["ip"] = c.ClientIP()

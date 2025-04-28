@@ -62,14 +62,14 @@ func assertSameOwner(file os.FileInfo, fileSpec *types.File) (bool, error) {
 	if fileSpec.User == "" && fileSpec.Group == "" {
 		return false, nil
 	}
-	var fileUid string
-	var fileGid string
+	var existingFileUid int
+	var existingFileGid int
 	stat, ok := file.Sys().(*syscall.Stat_t)
 	if !ok {
 		return false, fmt.Errorf("not syscall.Stat_t")
 	}
-	fileUid = strconv.Itoa(int(stat.Uid))
-	fileGid = strconv.Itoa(int(stat.Gid))
+	existingFileUid = (int(stat.Uid))
+	existingFileGid = (int(stat.Gid))
 	u, err := user.Lookup(fileSpec.User)
 	if err != nil {
 		return false, err
@@ -79,11 +79,14 @@ func assertSameOwner(file os.FileInfo, fileSpec *types.File) (bool, error) {
 		return false, err
 	}
 
-	if fileUid == u.Uid && fileGid == g.Gid {
+	newUid, _ := strconv.Atoi(u.Uid)
+	newGid, _ := strconv.Atoi(g.Gid)
+
+	if existingFileUid == newUid && existingFileGid == newGid {
 		return false, nil
 	}
 
-	return true, os.Chown(file.Name(), int(stat.Uid), int(stat.Gid))
+	return true, os.Chown(fileSpec.Path, newUid, newGid)
 }
 func chown(file *os.File, userName, group string) error {
 	if userName == "" && group == "" {
