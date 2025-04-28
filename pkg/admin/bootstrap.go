@@ -61,7 +61,6 @@ func (a *Admin) Bootstrap(ctx context.Context, hosts []string) error {
 		if err != nil {
 			return err
 		}
-
 	}
 	return nil
 }
@@ -125,14 +124,15 @@ func runOverSSH(ctx context.Context, client *ssh.Client, cmd string) error {
 	}
 	// session.Stdout = os.Stdout
 	defer session.Close()
-	buf := &bytes.Buffer{}
-	buf2 := &bytes.Buffer{}
-	session.Stdout = buf
-	session.Stderr = buf2
+	// buf := &bytes.Buffer{} // TODO do we want io.MultiWriter aswell?
+	// buf2 := &bytes.Buffer{}
+	session.Stdout = os.Stdout
+	session.Stderr = os.Stderr
 	session.Stdin = os.Stdin
 	err = session.Start(cmd)
 	if err != nil {
-		return fmt.Errorf("%w stdout: %s stderr: %s", err, buf.String(), buf2.String())
+		return fmt.Errorf("ssh: error running command %s error: %w", cmd, err)
+		// return fmt.Errorf("%w stdout: %s stderr: %s", err, buf.String(), buf2.String())
 	}
 
 	exit := make(chan struct{}, 1)
@@ -144,7 +144,7 @@ func runOverSSH(ctx context.Context, client *ssh.Client, cmd string) error {
 		select {
 		case <-ctx.Done():
 			if ctx.Err() != nil {
-				fmt.Println("stdout", buf.String(), "stderr", buf2.String())
+				// fmt.Println("stdout", buf.String(), "stderr", buf2.String())
 				session.Signal(ssh.SIGINT)
 				session.Close()
 			}
@@ -154,7 +154,8 @@ func runOverSSH(ctx context.Context, client *ssh.Client, cmd string) error {
 
 	err = session.Wait()
 	if err != nil {
-		return fmt.Errorf("%w stdout: %s stderr: %s", err, buf.String(), buf2.String())
+		// return fmt.Errorf("%w stdout: %s stderr: %s", err, buf.String(), buf2.String())
+		return fmt.Errorf("ssh: error waiting for command %s error: %w", cmd, err)
 	}
 
 	return nil

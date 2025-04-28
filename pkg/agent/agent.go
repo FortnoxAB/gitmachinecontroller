@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -130,6 +131,7 @@ func (a *Agent) run(pCtx context.Context) error {
 			if err != nil {
 				logrus.Error(err)
 				cancel()
+				time.Sleep(1 * time.Second)
 				continue
 			}
 
@@ -137,6 +139,16 @@ func (a *Agent) run(pCtx context.Context) error {
 			if err != nil {
 				logrus.Error(err)
 				cancel()
+
+				if errors.Is(err, websocket.ErrUnauthorized) {
+					logrus.Errorf("error asdf")
+
+					// remove token in runtime if we get auth error. Then the machine will have to be accepted again.
+					a.mutex.Lock()
+					a.config.Token = ""
+					a.mutex.Unlock()
+				}
+				time.Sleep(1 * time.Second)
 				continue
 			}
 

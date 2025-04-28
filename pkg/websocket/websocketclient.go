@@ -91,9 +91,12 @@ func (ws *websocketClient) getOnConnect() func() {
 	return ws.onConnect
 }
 
+var ErrUnauthorized = fmt.Errorf("websocket: error status 401 Unauthorized")
+
 func (ws *websocketClient) ConnectContext(ctx context.Context, addr string, headers http.Header) error {
 	var err error
 	var c *websocket.Conn
+	var resp *http.Response
 	logrus.Debugf("websocket: connecting to %s", addr)
 	if ws.tlsClientConfig != nil {
 		dialer := &websocket.Dialer{
@@ -101,10 +104,22 @@ func (ws *websocketClient) ConnectContext(ctx context.Context, addr string, head
 			HandshakeTimeout: 10 * time.Second,
 			TLSClientConfig:  ws.tlsClientConfig,
 		}
-		c, _, err = dialer.DialContext(ctx, addr, headers)
+		c, resp, err = dialer.DialContext(ctx, addr, headers)
 	} else {
-		c, _, err = websocket.DefaultDialer.DialContext(ctx, addr, headers)
+		c, resp, err = websocket.DefaultDialer.DialContext(ctx, addr, headers)
 	}
+
+	if resp.StatusCode != 101 {
+
+		if resp.StatusCode == 401 {
+			ws.wasDisconnected(err)
+			return ErrUnauthorized
+		}
+
+		ws.wasDisconnected(err)
+		return fmt.Errorf("websocket: error from server got status code: %d", resp.StatusCode)
+	}
+
 	if err != nil {
 		ws.wasDisconnected(err)
 		return err
