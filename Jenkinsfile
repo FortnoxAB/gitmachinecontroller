@@ -8,7 +8,7 @@ properties(
 	]
 )
 
-node('go1.23') {
+node('go1.24') {
 	container('run'){
 		def tag = ''
 		stage('Checkout') {
