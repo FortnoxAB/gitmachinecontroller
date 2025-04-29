@@ -293,7 +293,7 @@ spec:
 	logrus.SetOutput(buf)
 	a := admin.NewAdmin("./adminConfig", "", "", admin.WithTLSConfig(trustCert("./cert.pem")))
 	err = a.Exec(context.TODO(), "uptime")
-	assert.Equal(t, "websocket: bad handshake", err.Error())
+	assert.Equal(t, "websocket: error status 401 Unauthorized", err.Error())
 
 	assert.Contains(t, buf.String(), "http_request_status=401")
 	cancel()

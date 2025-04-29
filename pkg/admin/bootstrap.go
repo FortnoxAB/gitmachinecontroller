@@ -21,7 +21,7 @@ func (a *Admin) Bootstrap(ctx context.Context, hosts []string) error {
 		return err
 	}
 
-	binaryPath, err := getSelfLocation()
+	binaryPath, err := GetSelfLocation()
 	if err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func copyFileToServer(client *ssh.Client, src, dst string) error {
 
 	return session.Wait()
 }
-func getSelfLocation() (string, error) {
+func GetSelfLocation() (string, error) {
 	fname, err := exec.LookPath(os.Args[0])
 	if err != nil {
 		return "", err

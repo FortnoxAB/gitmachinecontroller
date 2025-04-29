@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fortnoxab/ginprometheus"
+	"github.com/fortnoxab/gitmachinecontroller/pkg/admin"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/agent/config"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/protocol"
 	"github.com/fortnoxab/gitmachinecontroller/pkg/api/v1/types"
@@ -79,6 +80,35 @@ func (ws *Webserver) InitTLS() *gin.Engine {
 		fmt.Fprintf(c.Writer, `<a href="/machines">Machines</a>`)
 	})
 	router.GET("/api/up-v1", err(ws.listMasters))
+	router.GET("/api/download-v1", err(func(c *gin.Context) error {
+		binaryPath, err := admin.GetSelfLocation()
+		if err != nil {
+			return err
+		}
+
+		f, err := os.Open(binaryPath)
+		if err != nil {
+			return err
+		}
+
+		defer f.Close()
+
+		_, err = io.Copy(c.Writer, f)
+		return err
+
+	}))
+	router.GET("/api/binary-checksum-v1", err(func(c *gin.Context) error {
+		f, err := os.Open("/binary-checksum")
+		if err != nil {
+			return err
+		}
+
+		defer f.Close()
+
+		_, err = io.Copy(c.Writer, f)
+		return err
+
+	}))
 	router.POST("/api/admin-v1", err(ws.createAdmin))
 
 	requireAdmin := router.Group("/")
