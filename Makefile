@@ -1,12 +1,13 @@
 .PHONY:	test imports
 SHELL := /bin/bash
 
-VERSION?=0.0.1-local
+VERSION?=$(shell git rev-parse HEAD )
 
 IMAGE = quay.io/fortnox/gitmachinecontroller
 
 build:
-	CGO_ENABLED=0 GOOS=linux go build -o gmc ./cmd/gmc
+	CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.BuildTime=$(shell date +%FT%T%z) -X main.Version=${VERSION} -X main.BuildCommit=$(shell git rev-parse HEAD)" -o gmc ./cmd/gmc
+	sha256sum gmc | awk '{print $$1}' > binary-checksum
 
 docker: build
 	docker build --pull --rm -t $(IMAGE):$(VERSION) .
