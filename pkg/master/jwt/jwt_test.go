@@ -1,7 +1,6 @@
 package jwt
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -27,7 +26,6 @@ func TestValidateToken(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, "test", validatedClaims.Host)
-	fmt.Println(jwtStr)
 	assert.Equal(t, true, validatedClaims.Admin)
 }
 
