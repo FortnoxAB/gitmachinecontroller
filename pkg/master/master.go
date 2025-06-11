@@ -268,6 +268,7 @@ func (m *Master) stateRunner(ctx context.Context, ch chan *types.Machine, websoc
 		case req := <-m.machineStateCh:
 			req.ReplyCh <- machines
 		case machine := <-ch:
+			// TODO do we want to save the whold spec here so we can send it to agent on reconnect?
 			machines[machine.Metadata.Name] = &types.MachineState{
 				Metadata:   machine.Metadata,
 				IP:         machine.Spec.IP,

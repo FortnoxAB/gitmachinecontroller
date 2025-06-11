@@ -74,15 +74,15 @@ func (m *Config) FindMasterForConnection(ctx context.Context, configFile, zone s
 				} else {
 					mastersOtherZones = append(mastersOtherZones, s)
 				}
-				rand.Shuffle(len(mastersMyZone), func(i, j int) {
-					mastersMyZone[i], mastersMyZone[j] = mastersMyZone[j], mastersMyZone[i]
-				})
-
-				rand.Shuffle(len(mastersOtherZones), func(i, j int) {
-					mastersOtherZones[i], mastersOtherZones[j] = mastersOtherZones[j], mastersOtherZones[i]
-				})
-				masters = append(mastersMyZone, mastersOtherZones...)
 			}
+			rand.Shuffle(len(mastersMyZone), func(i, j int) {
+				mastersMyZone[i], mastersMyZone[j] = mastersMyZone[j], mastersMyZone[i]
+			})
+
+			rand.Shuffle(len(mastersOtherZones), func(i, j int) {
+				mastersOtherZones[i], mastersOtherZones[j] = mastersOtherZones[j], mastersOtherZones[i]
+			})
+			masters = append(mastersMyZone, mastersOtherZones...)
 			// sort.Slice(masters, func(i, j int) bool {
 			// 	return masters[i].Zone == zone
 			// })
