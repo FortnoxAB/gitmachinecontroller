@@ -32,7 +32,7 @@ func (a *Admin) Bootstrap(ctx context.Context, hosts []string) error {
 		return err
 	}
 
-	master := conf.FindMasterForConnection(ctx, "", "")
+	master := conf.FindMasterForConnection(ctx, "", a.zone)
 
 	if master == "" {
 		return fmt.Errorf("found no alive master")

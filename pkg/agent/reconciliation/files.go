@@ -211,10 +211,10 @@ func writeContentIfNeeded(file *types.File) (bool, error) {
 
 func needsFetch(file *types.File) (bool, error) {
 	f, err := os.Open(file.Path)
-	if err != nil && os.IsNotExist(err) {
-		return true, nil // file does not exist it needs fetching
-	}
 	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil // file does not exist it needs fetching
+		}
 		return false, err
 	}
 	defer f.Close()
