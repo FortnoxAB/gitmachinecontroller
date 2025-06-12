@@ -205,6 +205,11 @@ func app() *cli.App {
 					Value: false,
 					Usage: "only pring on which machines the command would have been run on.",
 				},
+				&cli.StringFlag{
+					Name:  "zone",
+					Value: "",
+					Usage: "which zone to connect to from the cli",
+				},
 			},
 		},
 		{
@@ -236,6 +241,11 @@ func app() *cli.App {
 					Name:  "dry",
 					Value: false,
 					Usage: "only pring on which machines the command would have been run on.",
+				},
+				&cli.StringFlag{
+					Name:  "zone",
+					Value: "",
+					Usage: "which zone to connect to from the cli",
 				},
 			},
 		},
@@ -291,6 +301,39 @@ func app() *cli.App {
 					Aliases: []string{"c"},
 					Value:   defaultConfigLocation(),
 					Usage:   "config file location. contains info about the master urls",
+				},
+				&cli.StringFlag{
+					Name:  "zone",
+					Value: "",
+					Usage: "which zone to connect to from the cli",
+				},
+			},
+		},
+		{
+			Name:  "config",
+			Usage: "manage the client config",
+			Subcommands: []*cli.Command{
+				{
+					Name:  "init",
+					Usage: "download config from specified --master and saves to provided --config",
+					Action: func(c *cli.Context) error {
+						admin := admin.NewAdminFromContext(c)
+						return admin.ConfigInit(c.Context)
+					},
+					Flags: []cli.Flag{
+						&cli.StringFlag{
+							// this is the client for SREs so it needs to have a config somewhere.
+							Name:    "config",
+							Aliases: []string{"c"},
+							Value:   defaultConfigLocation(),
+							Usage:   "config file location. contains info about the master urls",
+						},
+						&cli.StringFlag{
+							Name:  "master",
+							Value: "",
+							Usage: "which initial master to fetch the config from",
+						},
+					},
 				},
 			},
 		},

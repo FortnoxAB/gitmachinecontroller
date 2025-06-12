@@ -41,7 +41,8 @@ type Admin struct {
 	regexp   string
 	dry      bool
 
-	zone string
+	zone   string
+	master string
 
 	// binary location when Bootstrap
 	targetPath string
@@ -59,6 +60,7 @@ func NewAdminFromContext(c *cli.Context) *Admin {
 		targetPath: c.String("target-path"),
 		sshUser:    c.String("ssh-user"),
 		zone:       c.String("zone"),
+		master:     c.String("master"),
 	}
 }
 
@@ -90,7 +92,7 @@ func (a *Admin) wsConnect(ctx context.Context, conf *config.Config) (websocket.W
 		wsClient.SetTLSConfig(a.tlsConfig)
 	}
 
-	master := conf.FindMasterForConnection(ctx, "", "")
+	master := conf.FindMasterForConnection(ctx, "", a.zone)
 
 	u, err := websocket.ToWS(master)
 	if err != nil {
@@ -302,7 +304,7 @@ func (a *Admin) Proxy(ctx context.Context) error {
 		return err
 	}
 
-	target, err := url.Parse(conf.FindMasterForConnection(ctx, "", ""))
+	target, err := url.Parse(conf.FindMasterForConnection(ctx, "", a.zone))
 	if err != nil {
 		return err
 	}
@@ -354,12 +356,17 @@ func (a *Admin) config() (*config.Config, error) {
 	conf, err := config.FromFile(a.configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			conf = &config.Config{
-				Masters: config.Masters{&config.Master{URL: "replace me"}},
+			// we dont have a config file. Just save master from command line argument to configfile.
+			u := "replace me"
+			if a.master != "" {
+				u = a.master
 			}
-			err := os.MkdirAll(filepath.Dir(a.configFile), 0700)
-			if err != nil {
-				return nil, err
+			conf = &config.Config{
+				Masters: config.Masters{&config.Master{URL: u}},
+			}
+			err1 := os.MkdirAll(filepath.Dir(a.configFile), 0700)
+			if err1 != nil {
+				return nil, err1
 			}
 
 			err = config.ToFile(a.configFile, conf)
@@ -384,7 +391,7 @@ func openBrowser(link string) error {
 	case "windows":
 		err = Run("rundll32", "url.dll,FileProtocolHandler", link)
 	default:
-		return errors.New("Unknown operating system, dont know how to open the link in the browser")
+		return errors.New("unknown operating system, dont know how to open the link in the browser")
 	}
 	return err
 }
@@ -434,6 +441,10 @@ func listenAndServe(srv *http.Server) error {
 		return err
 	}
 	logrus.Infof("started proxy on http://%s", ln.Addr().String())
-	openBrowser("http://" + ln.Addr().String() + "/machines")
+	err = openBrowser("http://" + ln.Addr().String() + "/machines")
+	if err != nil {
+		logrus.Error("error opening browser: ", err)
+	}
+
 	return srv.Serve(ln)
 }
